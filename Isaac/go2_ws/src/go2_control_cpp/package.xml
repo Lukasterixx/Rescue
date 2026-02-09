@@ -1,0 +1,70 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>go2_control_cpp</name>
+  <version>0.0.1</version>
+  <description>C++ control nodes for the Unitree Go2 using BehaviorTree.CPP</description>
+  <maintainer email="example@example.com">Example Maintainer</maintainer>
+  <license>Apache-2.0</license>
+
+  <!-- Build tool -->
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- Core ROS 2 -->
+  <depend>rclcpp</depend>
+  <depend>rclcpp_action</depend>
+  <depend>rclcpp_lifecycle</depend>
+  <depend>rclcpp_components</depend>
+  <depend>pluginlib</depend>
+  <depend>libcurl4-openssl-dev</depend>
+
+
+  <!-- BehaviorTree.CPP -->
+  <depend>behaviortree_cpp_v3</depend>
+
+  <!-- Nav2 infrastructure -->
+  <depend>nav2_common</depend>
+  <depend>nav2_behavior_tree</depend>
+  <depend>nav2_core</depend>
+  <depend>nav2_util</depend>
+  <depend>nav2_map_server</depend>
+
+  <!-- Messages & services -->
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>nav2_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>tf2_ros</depend>
+
+  <!-- Utility -->
+  <depend>ament_index_cpp</depend>
+
+  <!-- Linting -->
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+    <!-- More ROS 2 core & utils -->
+  <depend>rcpputils</depend>
+  <depend>visualization_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_geometry_msgs</depend>
+  <depend>pcl_conversions</depend>
+
+  <!-- Third-party libs resolved by rosdep -->
+  <depend>eigen</depend>         <!-- maps to libeigen3-dev -->
+  <depend>boost</depend>         <!-- libboost-* -->
+  <depend>libopencv-dev</depend>        <!-- libopencv-dev -->
+  <depend>yaml-cpp</depend>      <!-- libyaml-cpp-dev -->
+
+  <!-- Vendor / custom -->
+  <depend>unitree_api</depend>
+  <depend>unitree_go</depend>
+
+  <export>
+    <!-- ament_cmake support -->
+    <build_type>ament_cmake</build_type>
+    <!-- plugin description for BT nodes -->
+    <go2_control_cpp prefix="$(prefix)/navigator_plugins.xml"/>
+  </export>
+</package>

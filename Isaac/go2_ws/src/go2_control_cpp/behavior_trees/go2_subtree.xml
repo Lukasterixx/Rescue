@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root BTCPP_format="3"
+      main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <Parallel failure_threshold="1"
+              success_threshold="-1">
+      <ForceSuccess>
+        <RateController hz="0.2">
+          <FlattenPointCloudToMap2D resolution="0.5"
+                                    max_width_m="200.0"
+                                    max_height_m="200.0"
+                                    ground_height_threshold="0.55"
+                                    cloud_topic="/map"
+                                    pose_topic="/current_pose"
+                                    map2d_topic="/map2d"
+                                    queue_size="10"
+                                    update_radius_m="17.0"
+                                    maps_dir="/home/lukas/P2Dingo/Isaac/go2_ws/src/go2_control_cpp/maps"/>
+        </RateController>
+      </ForceSuccess>
+      <ForceSuccess>
+        <NewGoal goal="{goal}">
+          <RateController hz="5.0">
+            <PipelineSequence name="NavigateWithReplanning">
+              <DistanceController distance="1.0"
+                                  global_frame="map"
+                                  robot_base_frame="base_link">
+                <RateController hz="1.0">
+                  <ComputePathToPose goal="{goal}"
+                                     start=""
+                                     planner_id="GridBased"
+                                     server_name="compute_path_to_pose"
+                                     server_timeout="5s"
+                                     path="{path}"/>
+                </RateController>
+              </DistanceController>
+              <FollowPath controller_id="FollowPath"
+                          path="{path}"
+                          goal_checker_id=""
+                          server_name="follow_path"
+                          server_timeout="5s"/>
+            </PipelineSequence>
+          </RateController>
+        </NewGoal>
+      </ForceSuccess>
+    </Parallel>
+  </BehaviorTree>
+
+  <!-- Description of Node Models (used by Groot) -->
+  <TreeNodesModel>
+    <Action ID="ComputePathToPose">
+      <input_port name="goal">Destination to plan to</input_port>
+      <input_port name="start">Start pose of the path if overriding current robot pose</input_port>
+      <input_port name="planner_id">Mapped name to the planner plugin type to use</input_port>
+      <input_port name="server_name">Server name</input_port>
+      <input_port name="server_timeout">Server timeout</input_port>
+      <output_port name="path">Path created by ComputePathToPose node</output_port>
+    </Action>
+    <Decorator ID="DistanceController">
+      <input_port name="distance">Distance</input_port>
+      <input_port name="global_frame">Reference frame</input_port>
+      <input_port name="robot_base_frame">Robot base frame</input_port>
+    </Decorator>
+    <Action ID="FlattenPointCloudToMap2D">
+      <input_port name="resolution"
+                  default="0.1"
+                  type="double"/>
+      <input_port name="max_width_m"
+                  default="200.0"
+                  type="double"/>
+      <input_port name="max_height_m"
+                  default="200.0"
+                  type="double"/>
+      <input_port name="ground_height_threshold"
+                  default="0.2"
+                  type="double"/>
+      <input_port name="cloud_topic"
+                  default="/point_cloud2"
+                  type="string"/>
+      <input_port name="pose_topic"
+                  default="/current_pose"
+                  type="string"/>
+      <input_port name="map2d_topic"
+                  default="/map2d"
+                  type="string"/>
+      <input_port name="queue_size"
+                  default="10"
+                  type="int"/>
+      <input_port name="update_radius_m"
+                  default="20.0"
+                  type="double"/>
+      <input_port name="maps_dir"
+                  default="/home/lukas/P2Dingo/Isaac/go2_ws/src/go2_control_cpp/maps"
+                  type="string"/>
+    </Action>
+    <Action ID="FollowPath">
+      <input_port name="controller_id"
+                  default="FollowPath"/>
+      <input_port name="path">Path to follow</input_port>
+      <input_port name="goal_checker_id">Goal checker</input_port>
+      <input_port name="server_name">Server name</input_port>
+      <input_port name="server_timeout">Server timeout</input_port>
+    </Action>
+    <Decorator ID="NewGoal">
+      <input_port name="goal"
+                  default="{goal}"
+                  type="geometry_msgs::msg::PoseStamped"/>
+    </Decorator>
+    <Control ID="PipelineSequence"/>
+    <Decorator ID="RateController">
+      <input_port name="hz">Rate</input_port>
+    </Decorator>
+  </TreeNodesModel>
+
+</root>

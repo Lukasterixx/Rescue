@@ -1,0 +1,59 @@
+services:
+  p2dingo:
+    image: p2test:latest
+    container_name: p2test
+    network_mode: host
+    ipc: host
+    privileged: true
+    
+    runtime: nvidia
+    environment:
+      - TZ=Australia/Sydney
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - NETWORK_INTERFACE=enP8p1s0
+
+    restart: "no"
+    stdin_open: true
+    tty: true
+    ulimits:
+      memlock: -1
+    
+    volumes:
+      # --- KEEP THESE (Config & Code) ---
+      - ./entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
+      - ./cyclonedds_go2.xml:/root/cyclonedds_go2.xml
+      - /home/unitree/.go2_token:/root/.go2_token:ro
+      
+      # Allows you to edit code on the laptop, and entrypoint will quick-compile JUST this pkg
+      - /home/unitree/P2Dingo/Isaac/go2_ws/src/go2_control_cpp:/root/ws/src/go2_control_cpp
+
+      # --- OPTIONAL: Debugging ---
+      - p2dingo-glim-dump:/tmp/dump
+      
+      # --- REMOVED VOLUMES ---
+      # We removed p2dingo-build, p2dingo-install, p2dingo-gtsam, etc.
+      # This ensures the container uses the compiled binaries BAKED INTO the image.
+
+    command: ["/usr/local/bin/run_with_livox.sh"]
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  watchtower:
+    image: containrrr/watchtower
+    container_name: watchtower
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /home/unitree/.docker/config.json:/config/config.json:ro
+    environment:
+      - DOCKER_CONFIG=/config
+      - WATCHTOWER_LABEL_ENABLE=true
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_ROLLING_RESTART=true
+      - TZ=Australia/Sydney
+      - WATCHTOWER_SCHEDULE=0 */30 * * * *
+    restart: unless-stopped
+
+volumes:
+  p2dingo-glim-dump: {}
+  

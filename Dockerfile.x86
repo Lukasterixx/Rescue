@@ -1,0 +1,114 @@
+# syntax=docker/dockerfile:1
+FROM ros:humble-ros-base
+ENV DEBIAN_FRONTEND=noninteractive
+SHELL ["/bin/bash", "-lc"]
+
+# ------------------------------------------------------------------------------
+# System + ROS Dependencies (match Jetson feature set)
+# ------------------------------------------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git build-essential python3-pip python3-rosdep python3-colcon-common-extensions \
+    cmake \
+    # ROS core + Nav2 + Behavior Trees
+    ros-humble-navigation2 ros-humble-nav2-bringup \
+    ros-humble-pcl-conversions ros-humble-behaviortree-cpp-v3 \
+    ros-humble-py-trees ros-humble-py-trees-ros \
+    ros-humble-rmw-cyclonedds-cpp \
+    ros-humble-rosidl-generator-dds-idl \
+    ros-humble-rosidl-default-generators \
+    ros-humble-rosidl-typesupport-fastrtps-cpp \
+    ros-humble-rosidl-typesupport-fastrtps-c \
+    # Core libs
+    libpcl-dev libopencv-dev libyaml-cpp-dev \
+    libboost-filesystem-dev libboost-system-dev \
+    # SLAM (Point-LIO deps)
+    ros-humble-pcl-ros \
+    ros-humble-visualization-msgs \
+    libeigen3-dev \
+    # GLIM deps
+    libomp-dev libboost-all-dev libmetis-dev \
+    libfmt-dev libspdlog-dev \
+    libglm-dev libglfw3-dev libpng-dev libjpeg-dev \
+    ros-humble-libg2o \
+ && rm -rf /var/lib/apt/lists/*
+
+# ------------------------------------------------------------------------------
+# rosdep
+# ------------------------------------------------------------------------------
+RUN rosdep init 2>/dev/null || true && rosdep update
+
+# ------------------------------------------------------------------------------
+# Cyclone DDS config
+# ------------------------------------------------------------------------------
+COPY cyclonedds_go2.xml /root/cyclonedds_go2.xml
+ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+ENV CYCLONEDDS_URI=file:///root/cyclonedds_go2.xml
+ENV ROS_DOMAIN_ID=0
+
+# ------------------------------------------------------------------------------
+# Main workspace
+# ------------------------------------------------------------------------------
+ENV WS=/root/ws
+RUN mkdir -p $WS/src
+WORKDIR $WS/src
+
+# Unitree SDK
+RUN git clone --depth 1 https://github.com/unitreerobotics/unitree_ros2.git
+
+# go2_control_cpp
+COPY Isaac/go2_ws/src/go2_control_cpp $WS/src/go2_control_cpp
+
+# ------------------------------------------------------------------------------
+# GLIM + dependencies (SOURCE ONLY, built during entrypoint)
+# ------------------------------------------------------------------------------
+ENV GTSAM_DIR=/root/gtsam
+RUN git clone https://github.com/borglab/gtsam ${GTSAM_DIR} && \
+    cd ${GTSAM_DIR} && git checkout 4.3a0
+
+ENV GTSAM_POINTS_DIR=/root/gtsam_points
+RUN git clone https://github.com/koide3/gtsam_points ${GTSAM_POINTS_DIR}
+
+RUN git clone https://github.com/koide3/glim.git ${WS}/src/glim
+RUN git clone https://github.com/koide3/glim_ros2.git ${WS}/src/glim_ros2
+
+# ------------------------------------------------------------------------------
+# Livox setup (same layout as Jetson)
+# ------------------------------------------------------------------------------
+ENV LIVOX_SDK_DIR=/root/Livox-SDK2
+RUN git clone --depth 1 https://github.com/Livox-SDK/Livox-SDK2.git $LIVOX_SDK_DIR
+
+ENV LIVOX_WS=/root/ws_livox
+RUN mkdir -p $LIVOX_WS/src
+
+RUN git clone --depth 1 https://github.com/Livox-SDK/livox_ros_driver2.git $LIVOX_WS/src/livox_ros_driver2
+
+COPY MID360_config.json $LIVOX_WS/src/livox_ros_driver2/config/MID360_config.json
+COPY mid360_driver_only.launch.py $LIVOX_WS/src/livox_ros_driver2/launch_ROS2/mid360_driver_only.launch.py
+
+# ------------------------------------------------------------------------------
+# Resolve dependencies (same as Jetson)
+# ------------------------------------------------------------------------------
+WORKDIR $WS
+RUN source /opt/ros/humble/setup.bash && \
+    rosdep update && \
+    rosdep install --from-paths src --ignore-src -r -y || true
+
+# ------------------------------------------------------------------------------
+# Entrypoint (builds GTSAM, gtsam_points, GLIM, Livox at runtime)
+# ------------------------------------------------------------------------------
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# Shell sourcing
+RUN echo 'source /opt/ros/humble/setup.bash' >> /root/.bashrc && \
+    echo '[ -f /root/ws/install/setup.bash ] && source /root/ws/install/setup.bash || true' >> /root/.bashrc
+
+WORKDIR $WS
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
+# ------------------------------------------------------------------------------
+# Runtime helper script
+# ------------------------------------------------------------------------------
+COPY run_with_livox.sh /usr/local/bin/run_with_livox.sh
+RUN chmod +x /usr/local/bin/run_with_livox.sh
+

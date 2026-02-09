@@ -1,0 +1,149 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root BTCPP_format="3"
+      main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <Nav2Ready topic="/nav2_ready">
+      <Sequence>
+        <ReturnToBaseAction xy_tolerance="0.3"
+                            rot_speed="1.0"
+                            cmd_vel_topic="/robot0/cmd_vel"
+                            robot_frame="livox_frame"
+                            global_frame="odom"/>
+        <Fallback>
+          <RunOnce>
+            <PathPlanner alignment="{alignment}"
+                         align_provided="{align_provided}"
+                         average_angle="{average_angle}"
+                         panels="{panels}"
+                         long_edge_indices="{long_edge_indices}"/>
+          </RunOnce>
+          <DistanceTickController dist_m="3.0"
+                                  global_frame="odom"
+                                  base_frame="livox_frame"
+                                  warmup_require_success="true">
+            <Map2DSaver/>
+            <Delay delay_msec="100">
+              <FrontierExplore global_frame="map2d"
+                               base_frame="livox_frame"/>
+            </Delay>
+          </DistanceTickController>
+        </Fallback>
+        <DistanceTickController dist_m="3.0"
+                                global_frame="odom"
+                                base_frame="livox_frame"
+                                warmup_require_success="true">
+          <LocalizeSubmap global_panels="{panels}"
+                          map_to_map2d="{map_to_map2d}"/>
+        </DistanceTickController>
+        <LateralCollisionNode long_edge_indices="{long_edge_indices}">
+          <DistanceTickController dist_m="3.0"
+                                  global_frame="odom"
+                                  base_frame="livox_frame"
+                                  warmup_require_success="true">
+            <DataServer panels="{panels}"
+                        average_angle="{average_angle}"
+                        current_panel="{current_panel}"/>
+          </DistanceTickController>
+          <CameraController current_panel="{current_panel}"/>
+        </LateralCollisionNode>
+      </Sequence>
+    </Nav2Ready>
+  </BehaviorTree>
+
+  <!-- Description of Node Models (used by Groot) -->
+  <TreeNodesModel>
+    <Action ID="CameraController">
+      <input_port name="current_panel"
+                  default="{current_panel}"
+                  type="go2_control_cpp::CurrentPanel"/>
+    </Action>
+    <Action ID="DataServer">
+      <input_port name="panels"
+                  default="{panels}"
+                  type="std::vector&lt;go2_control_cpp::Panel&gt;"/>
+      <input_port name="average_angle"
+                  default="{average_angle}"
+                  type="double"/>
+      <output_port name="current_panel"
+                   default="{current_panel}"
+                   type="go2_control_cpp::CurrentPanel"/>
+    </Action>
+    <Control ID="DistanceTickController">
+      <input_port name="dist_m"
+                  default="0.5"
+                  type="double"/>
+      <input_port name="global_frame"
+                  default="odom"
+                  type="string"/>
+      <input_port name="base_frame"
+                  default="livox_frame"
+                  type="string"/>
+      <input_port name="warmup_require_success"
+                  default="true"
+                  type="bool"/>
+    </Control>
+    <Action ID="FrontierExplore">
+      <input_port name="global_frame"
+                  default="odom"
+                  type="string"/>
+      <input_port name="base_frame"
+                  default="livox_frame"
+                  type="string"/>
+    </Action>
+    <Control ID="LateralCollisionNode">
+      <input_port name="long_edge_indices"
+                  default="{long_edge_indices}"
+                  type="std::vector&lt;int&gt;"/>
+    </Control>
+    <Action ID="LocalizeSubmap">
+      <input_port name="global_panels"
+                  default="{panels}"
+                  type="std::vector&lt;go2_control_cpp::Panel&gt;"/>
+      <output_port name="map_to_map2d"
+                   default="{map_to_map2d}"
+                   type="geometry_msgs::msg::TransformStamped"/>
+    </Action>
+    <Action ID="Map2DSaver"/>
+    <Control ID="Nav2Ready">
+      <input_port name="topic"
+                  default="/nav2_ready"
+                  type="string"/>
+    </Control>
+    <Action ID="PathPlanner">
+      <input_port name="alignment"
+                  default="{alignment}"
+                  type="go2_control_cpp::Alignment"/>
+      <input_port name="align_provided"
+                  default="{align_provided}"
+                  type="bool"/>
+      <output_port name="average_angle"
+                   default="{average_angle}"
+                   type="double"/>
+      <output_port name="panels"
+                   default="{panels}"
+                   type="std::vector&lt;go2_control_cpp::Panel&gt;"/>
+      <output_port name="long_edge_indices"
+                   default="{long_edge_indices}"
+                   type="std::vector&lt;int&gt;"/>
+    </Action>
+    <Action ID="ReturnToBaseAction">
+      <input_port name="xy_tolerance"
+                  default="0.3"
+                  type="double"/>
+      <input_port name="rot_speed"
+                  default="1.0"
+                  type="double"/>
+      <input_port name="cmd_vel_topic"
+                  default="/robot0/cmd_vel"
+                  type="string"/>
+      <input_port name="robot_frame"
+                  default="livox_frame"
+                  type="string"/>
+      <input_port name="global_frame"
+                  default="odom"
+                  type="string"/>
+    </Action>
+    <Control ID="RunOnce"/>
+  </TreeNodesModel>
+
+</root>

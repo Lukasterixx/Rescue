@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root BTCPP_format="3" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RateController hz="5.0">
+      <PipelineSequence name="NavigateWithReplanning">
+        <DistanceController distance="1.0" global_frame="map2d" robot_base_frame="livox_frame">
+          <!-- Use ~1 Hz so preemptions are handled promptly.
+               If you keep 0.1 Hz, preemption may wait up to 10s. -->
+          <RateController hz="1.0">
+            <!-- Replan if: Goal updated OR GlobalUpdatedGoal OR path invalid; else reuse path -->
+            <Fallback name="PlanIfNeeded">
+              <Sequence name="NeedNewPlan">
+                <!-- AnyNeedPlan: SUCCESS if ANY child is SUCCESS -->
+                <Fallback name="AnyNeedPlan">
+                  <GoalUpdated/>
+                  <GlobalUpdatedGoal/>
+                  <Inverter>
+                    <IsPathValid path="{path}" server_timeout="2s"/>
+                  </Inverter>
+                </Fallback>
+
+                <ComputePathToPose
+                  goal="{goal}"
+                  start=""
+                  planner_id="GridBased"
+                  server_name="compute_path_to_pose"
+                  server_timeout="5s"
+                  path="{path}"/>
+              </Sequence>
+
+              <!-- Reuse current path when still valid and goal unchanged -->
+              <IsPathValid path="{path}" server_timeout="2s"/>
+            </Fallback>
+          </RateController>
+        </DistanceController>
+
+        <FollowPath
+          controller_id="FollowPath"
+          path="{path}"
+          goal_checker_id=""
+          server_name="follow_path"
+          server_timeout="5s"/>
+      </PipelineSequence>
+    </RateController>
+  </BehaviorTree>
+
+  <!-- Keep your TreeNodesModel exactly as you pasted (no changes needed). -->
+</root>

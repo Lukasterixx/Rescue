@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root BTCPP_format="3"
+      main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RateController hz="5.0">
+      <PipelineSequence name="NavigateWithReplanning">
+        <DistanceController distance="1.0"
+                            global_frame="odom"
+                            robot_base_frame="livox_frame">
+          <RateController hz="0.1">
+            <ComputePathToPose goal="{goal}"
+                               start=""
+                               planner_id="GridBased"
+                               server_name="compute_path_to_pose"
+                               server_timeout="5s"
+                               path="{path}"/>
+          </RateController>
+        </DistanceController>
+        <FollowPath controller_id="FollowPath"
+                    path="{path}"
+                    goal_checker_id=""
+                    server_name="follow_path"
+                    server_timeout="5s"/>
+      </PipelineSequence>
+    </RateController>
+  </BehaviorTree>
+
+  <!-- Description of Node Models (used by Groot) -->
+  <TreeNodesModel>
+    <Action ID="ComputePathToPose">
+      <input_port name="goal">Destination to plan to</input_port>
+      <input_port name="start">Start pose of the path if overriding current robot pose</input_port>
+      <input_port name="planner_id"
+                  default="GridBased"
+                  type="string"/>
+      <input_port name="server_name"
+                  default="compute_path_to_pose"
+                  type="string"/>
+      <input_port name="server_timeout"
+                  default="5s"
+                  type="string"/>
+      <output_port name="path">Path created by ComputePathToPose node</output_port>
+    </Action>
+    <Decorator ID="DistanceController">
+      <input_port name="distance">Distance</input_port>
+      <input_port name="global_frame"
+                  default="odom"
+                  type="string"/>
+      <input_port name="robot_base_frame"
+                  default="livox_frame"
+                  type="string"/>
+    </Decorator>
+    <Action ID="FollowPath">
+      <input_port name="controller_id"
+                  default="FollowPath"/>
+      <input_port name="path">Path to follow</input_port>
+      <input_port name="goal_checker_id">Goal checker</input_port>
+      <input_port name="server_name"
+                  default="follow_path"
+                  type="string"/>
+      <input_port name="server_timeout"
+                  default="5s"
+                  type="string"/>
+    </Action>
+    <Control ID="PipelineSequence"
+             editable="true"/>
+    <Decorator ID="RateController"
+               editable="true">
+      <input_port name="hz"/>
+    </Decorator>
+  </TreeNodesModel>
+
+</root>

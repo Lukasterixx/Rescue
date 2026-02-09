@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root BTCPP_format="3">
+  <BehaviorTree ID="Untitled">
+    <Parallel failure_threshold="1"
+              success_threshold="-1">
+      <SLAMLaunch/>
+      <Delay delay_msec="5000">
+        <Sequence>
+          <FlattenPointCloudToMap2D resolution="0.1"
+                                    max_width_m="200.0"
+                                    max_height_m="200.0"
+                                    ground_height_threshold="0.2"
+                                    cloud_topic="/map"
+                                    pose_topic="/current_pose"
+                                    map2d_topic="/map2d"
+                                    queue_size="10"
+                                    publish_interval="5.0"
+                                    update_radius_m="20.0"/>
+          <Map2DSaver/>
+        </Sequence>
+      </Delay>
+    </Parallel>
+  </BehaviorTree>
+
+  <!-- Description of Node Models (used by Groot) -->
+  <TreeNodesModel>
+    <Action ID="FlattenPointCloudToMap2D">
+      <input_port name="resolution"
+                  default="0.1"
+                  type="double"/>
+      <input_port name="max_width_m"
+                  default="200.0"
+                  type="double"/>
+      <input_port name="max_height_m"
+                  default="200.0"
+                  type="double"/>
+      <input_port name="ground_height_threshold"
+                  default="0.2"
+                  type="double"/>
+      <input_port name="cloud_topic"
+                  default="/map"
+                  type="string"/>
+      <input_port name="pose_topic"
+                  default="/current_pose"
+                  type="string"/>
+      <input_port name="map2d_topic"
+                  default="/map2d"
+                  type="string"/>
+      <input_port name="queue_size"
+                  default="10"
+                  type="int"/>
+      <input_port name="publish_interval"
+                  default="5.0"
+                  type="double"/>
+      <input_port name="update_radius_m"
+                  default="20.0"
+                  type="double"/>
+    </Action>
+    <Action ID="Map2DSaver"/>
+    <Action ID="SLAMLaunch"/>
+  </TreeNodesModel>
+
+</root>

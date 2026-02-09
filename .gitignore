@@ -1,0 +1,11 @@
+# from go2_ws
+build
+install
+log
+roslogs
+sanitizer_report.csv
+test_results.xml
+
+# from isaac-go2-ros2
+__pycache__
+outputs

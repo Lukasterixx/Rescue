@@ -1,0 +1,266 @@
+# syntax=docker/dockerfile:1
+# Base image for JetPack 6.1 (R36.4.0)
+FROM dustynv/ros:humble-desktop-l4t-r36.4.0
+
+ENV DEBIAN_FRONTEND=noninteractive
+SHELL ["/bin/bash", "-lc"]
+
+# ------------------------------------------------------------------------------
+# ENVIRONMENT & PATHS
+# ------------------------------------------------------------------------------
+ENV WS=/root/ws
+ENV LIVOX_WS=/root/ws_livox
+ENV GTSAM_PREFIX=/opt/gtsam_stack
+ENV LIVOX_SDK_PREFIX=/usr/local
+ENV LIVOX_SDK_DIR=/root/Livox-SDK2
+ENV GTSAM_DIR=/root/gtsam
+ENV GTSAM_POINTS_DIR=/root/gtsam_points
+
+# ROS & DDS Config
+ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+ENV CYCLONEDDS_URI=file:///root/cyclonedds_go2.xml
+ENV ROS_DOMAIN_ID=0
+
+# Hardware / Compile Optimization
+ENV CMAKE_BUILD_PARALLEL_LEVEL=4
+
+# Prioritize NVIDIA/Local libraries to prevent OpenCV version mixing
+ENV LD_LIBRARY_PATH=/lib:/usr/lib/aarch64-linux-gnu/nvidia:${LD_LIBRARY_PATH}
+
+# ------------------------------------------------------------------------------
+# SYSTEM SETUP: Apt Config & Basic Deps
+# ------------------------------------------------------------------------------
+# Configure apt retry
+RUN echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries && \
+    echo 'Acquire::http::Timeout "240";' >> /etc/apt/apt.conf.d/80-retries
+
+# Refresh ROS Keys & Install Base Tools
+RUN apt-get update || true && \
+    apt-get install -y curl gnupg lsb-release && \
+    curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(lsb_release -cs) main" > /etc/apt/sources.list.d/ros2.list && \
+    rm -f /etc/apt/sources.list.d/ros2-latest.list || true
+
+# Install Heavy Dependencies (OpenJDK)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openjdk-11-jre-headless \
+    && rm -rf /var/lib/apt/lists/*
+
+# ------------------------------------------------------------------------------
+# FIX: Mock OpenCV to preserve NVIDIA Acceleration
+# ------------------------------------------------------------------------------
+RUN apt-get update && apt-get install -y equivs && \
+    echo "Section: misc" > opencv-dummy.control && \
+    echo "Priority: optional" >> opencv-dummy.control && \
+    echo "Standards-Version: 3.9.2" >> opencv-dummy.control && \
+    echo "Package: libopencv-dev" >> opencv-dummy.control && \
+    echo "Version: 4.5.4+dfsg-9ubuntu4" >> opencv-dummy.control && \
+    echo "Provides: libopencv-core-dev, libopencv-flann-dev, libopencv-imgproc-dev, libopencv-imgcodecs-dev, libopencv-videoio-dev, libopencv-highgui-dev, libopencv-ml-dev, libopencv-features2d-dev, libopencv-calib3d-dev, libopencv-dnn-dev, libopencv-objdetect-dev, libopencv-photo-dev, libopencv-video-dev, libopencv-shape-dev, libopencv-stitching-dev, libopencv-superres-dev, libopencv-videostab-dev, libopencv-contrib-dev, libopencv-dev" >> opencv-dummy.control && \
+    echo "Architecture: all" >> opencv-dummy.control && \
+    echo "Description: Dummy package to satisfy ROS dependencies without removing NVIDIA OpenCV" >> opencv-dummy.control && \
+    equivs-build opencv-dummy.control && \
+    dpkg -i libopencv-dev_*.deb && \
+    rm opencv-dummy.control libopencv-dev_*.deb
+
+# ------------------------------------------------------------------------------
+# INSTALL DEPENDENCIES
+# ------------------------------------------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git build-essential python3-pip python3-rosdep python3-colcon-common-extensions \
+    cmake \
+    ros-humble-navigation2 ros-humble-nav2-bringup \
+    ros-humble-pcl-conversions ros-humble-behaviortree-cpp-v3 \
+    ros-humble-py-trees ros-humble-py-trees-ros \
+    ros-humble-rmw-cyclonedds-cpp \
+    ros-humble-rosidl-generator-dds-idl \
+    ros-humble-rosidl-default-generators \
+    ros-humble-rosidl-typesupport-fastrtps-cpp \
+    ros-humble-rosidl-typesupport-fastrtps-c \
+    libpcl-dev libyaml-cpp-dev \
+    libboost-filesystem-dev libboost-system-dev \
+    ros-humble-pcl-ros \
+    ros-humble-visualization-msgs \
+    ros-humble-foxglove-bridge \
+    libeigen3-dev \
+    ros-humble-rosbag2-compression \
+    ros-humble-rosbag2-cpp \
+    ros-humble-launch-ros \
+    ros-humble-ros2launch \
+    ros-humble-ros2run \
+    ros-humble-ros2pkg \
+    python3-uvicorn \
+    python3-fastapi \
+    python3-requests \
+    ros-humble-ament-lint-auto \
+    ros-humble-ament-lint-common \
+    ros-humble-launch-xml \
+    ros-humble-ament-cmake-auto \
+    libomp-dev libboost-all-dev libmetis-dev \
+    libfmt-dev libspdlog-dev \
+    libglm-dev libglfw3-dev libpng-dev libjpeg-dev \
+    ros-humble-libg2o \
+    iproute2 iputils-ping nano \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN rosdep init 2>/dev/null || true && rosdep update
+
+# ------------------------------------------------------------------------------
+# BUILD PHASE 1: Third Party Libs (GTSAM, GTSAM Points, Iridescence, LivoxSDK)
+# ------------------------------------------------------------------------------
+
+# 1. GTSAM (CUDA)
+RUN git clone https://github.com/borglab/gtsam ${GTSAM_DIR} && \
+    cd ${GTSAM_DIR} && git checkout 4.3a0 && \
+    mkdir -p build && cd build && \
+    cmake .. \
+        -DCMAKE_INSTALL_PREFIX="${GTSAM_PREFIX}" \
+        -DGTSAM_BUILD_EXAMPLES_ALWAYS=OFF \
+        -DGTSAM_BUILD_TESTS=OFF \
+        -DGTSAM_WITH_TBB=OFF \
+        -DGTSAM_USE_SYSTEM_EIGEN=ON \
+        -DCMAKE_CUDA_ARCHITECTURES=87 \
+        -DGTSAM_BUILD_WITH_MARCH_NATIVE=OFF && \
+    cmake --build . -- -j$(nproc) && \
+    cmake --install . && \
+    echo "${GTSAM_PREFIX}/lib" > /etc/ld.so.conf.d/gtsam.conf && ldconfig
+
+# 2. GTSAM Points (CUDA)
+RUN git clone https://github.com/koide3/gtsam_points ${GTSAM_POINTS_DIR} && \
+    cd ${GTSAM_POINTS_DIR} && \
+    mkdir -p build && cd build && \
+    cmake .. \
+        -DCMAKE_INSTALL_PREFIX="${GTSAM_PREFIX}" \
+        -DCMAKE_CUDA_ARCHITECTURES=87 \
+        -DBUILD_WITH_CUDA=ON && \
+    cmake --build . -- -j$(nproc) && \
+    cmake --install . && \
+    echo "${GTSAM_PREFIX}/lib" > /etc/ld.so.conf.d/gtsam_points.conf && ldconfig
+
+# 3. Iridescence
+RUN git clone --recursive https://github.com/koide3/iridescence /tmp/iridescence && \
+    cd /tmp/iridescence && \
+    mkdir -p build && cd build && \
+    cmake .. -DCMAKE_BUILD_TYPE=Release && \
+    make -j$(nproc) && \
+    make install && \
+    rm -rf /tmp/iridescence && \
+    ldconfig
+
+# 4. Livox SDK2
+RUN git clone --depth 1 https://github.com/Livox-SDK/Livox-SDK2.git ${LIVOX_SDK_DIR} && \
+    cd ${LIVOX_SDK_DIR} && \
+    mkdir -p build && cd build && \
+    cmake .. -DCMAKE_INSTALL_PREFIX="${LIVOX_SDK_PREFIX}" && \
+    make -j$(nproc) && \
+    make install && \
+    echo "${LIVOX_SDK_PREFIX}/lib" >/etc/ld.so.conf.d/livox_sdk.conf && \
+    ldconfig
+
+# ------------------------------------------------------------------------------
+# BUILD PHASE 2: Workspace Preparation
+# ------------------------------------------------------------------------------
+WORKDIR $WS/src
+
+# Clone sources
+RUN git clone --depth 1 https://github.com/unitreerobotics/unitree_ros2.git
+RUN git clone https://github.com/vick-l1m/P2RemoteConnection.git $WS/src/P2RemoteConnection
+RUN git clone https://github.com/koide3/glim.git ${WS}/src/glim
+RUN git clone https://github.com/koide3/glim_ros2.git ${WS}/src/glim_ros2
+# Clone vision_opencv to fix version conflict
+RUN git clone -b humble https://github.com/ros-perception/vision_opencv.git $WS/src/vision_opencv
+
+# Copy Local Packages & Configs
+COPY Isaac/go2_ws/src/go2_control_cpp $WS/src/go2_control_cpp
+COPY cyclonedds_go2.xml /root/cyclonedds_go2.xml
+
+# Install Python Requirements for P2Remote
+RUN pip3 install fastapi uvicorn && \
+    pip3 install -r $WS/src/P2RemoteConnection/src/p2_remote_connection/requirements.txt || echo "Warning: requirements.txt failed"
+
+# Livox ROS Driver Setup
+WORKDIR $LIVOX_WS/src
+RUN git clone --depth 1 https://github.com/Livox-SDK/livox_ros_driver2.git
+COPY MID360_config.json $LIVOX_WS/src/livox_ros_driver2/config/MID360_config.json
+COPY mid360_driver_only.launch.py $LIVOX_WS/src/livox_ros_driver2/launch_ROS2/mid360_driver_only.launch.py
+
+# Rosdep install
+WORKDIR $WS
+RUN source /opt/ros/humble/setup.bash && \
+    rosdep update && \
+    rosdep install --from-paths src --ignore-src -r -y || true
+
+# ------------------------------------------------------------------------------
+# BUILD PHASE 3: Compilation (The "Exact Manner")
+# ------------------------------------------------------------------------------
+
+# 1. Build Livox ROS Driver
+SHELL ["/bin/bash", "-c"]
+RUN source /opt/ros/humble/setup.bash && \
+    cd $LIVOX_WS/src/livox_ros_driver2 && \
+    ./build.sh humble
+
+# 2. Build Main Workspace
+# We use a single RUN command with strict ordering to mimic the entrypoint script logic
+WORKDIR $WS
+RUN source /opt/ros/humble/setup.bash && \
+    source $LIVOX_WS/install/setup.bash && \
+    export CMAKE_PREFIX_PATH="${GTSAM_PREFIX}:${CMAKE_PREFIX_PATH}" && \
+    \
+    echo "--- Building cv_bridge (Early) ---" && \
+    colcon build --packages-select cv_bridge --cmake-args -DCMAKE_BUILD_TYPE=Release && \
+    source install/setup.bash && \
+    \
+    echo "--- Building GLIM Core ---" && \
+    colcon build \
+      --packages-select glim \
+      --cmake-args \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_WITH_CUDA=ON \
+        -DCMAKE_CUDA_ARCHITECTURES=87 \
+        -DBUILD_WITH_MARCH_NATIVE=OFF \
+        -DBUILD_TESTING=OFF && \
+    source install/setup.bash && \
+    \
+    echo "--- Fixing GLIM Include Path ---" && \
+    export CPLUS_INCLUDE_PATH="$WS/install/glim/include:${CPLUS_INCLUDE_PATH}" && \
+    \
+    echo "--- Building GLIM ROS ---" && \
+    colcon build \
+      --packages-select glim_ros \
+      --cmake-args \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_WITH_CUDA=ON \
+        -DCMAKE_CUDA_ARCHITECTURES=87 \
+        -DBUILD_WITH_MARCH_NATIVE=OFF \
+        -DBUILD_TESTING=OFF && \
+    source install/setup.bash && \
+    \
+    echo "--- Building Remaining Packages ---" && \
+    colcon build \
+      --packages-skip unitree_ros2_example cv_bridge glim glim_ros \
+      --cmake-args \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_WITH_CUDA=ON \
+        -DCMAKE_CUDA_ARCHITECTURES=87 \
+        -DBUILD_WITH_VIEWER=OFF \
+        -DBUILD_WITH_MARCH_NATIVE=OFF \
+        -DBUILD_TESTING=OFF
+
+# ------------------------------------------------------------------------------
+# ENTRYPOINT SETUP
+# ------------------------------------------------------------------------------
+# Persist the include path fix for runtime
+ENV CPLUS_INCLUDE_PATH="${WS}/install/glim/include:${CPLUS_INCLUDE_PATH}"
+
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY run_with_livox.sh /usr/local/bin/run_with_livox.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh && \
+    chmod +x /usr/local/bin/run_with_livox.sh
+
+# Add sourcing to bashrc for interactive shells
+RUN echo 'source /opt/ros/humble/setup.bash' >> /root/.bashrc && \
+    echo 'source /root/ws_livox/install/setup.bash' >> /root/.bashrc && \
+    echo 'source /root/ws/install/setup.bash' >> /root/.bashrc
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["bash"]

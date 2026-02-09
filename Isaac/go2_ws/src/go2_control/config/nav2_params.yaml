@@ -1,0 +1,90 @@
+# go2_control/config/nav2_params.yaml
+
+planner_server:
+  ros__parameters:
+    use_sim_time: True
+    expected_planner_frequency: 20.0
+
+    global_costmap:
+      ros__parameters:
+        global_frame: "map"
+        robot_base_frame: "base_link"
+        plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+
+        static_layer:
+          plugin: "nav2_costmap_2d::StaticLayer"
+          map_topic: "/map_nav2"       # ← read from static map server
+          subscribe_to_updates: False  # ← one‐shot load only
+
+        obstacle_layer:
+          plugin: "nav2_costmap_2d::ObstacleLayer"
+          # (your obstacle settings here)
+
+        inflation_layer:
+          plugin: "nav2_costmap_2d::InflationLayer"
+          # (your inflation settings here)
+
+controller_server:
+  ros__parameters:
+    use_sim_time: True
+    controller_plugins: ["FollowPath"]
+
+    FollowPath:
+      plugin: "dwb_core::DWBLocalPlanner"
+      transform_tolerance: 0.1
+      critics:
+        - "PathDistCritic"
+        - "GoalAlignCritic"
+        - "OscillationCritic"
+        - "GoalDistCritic"
+        - "PathAlignCritic"
+        - "RotateToGoalCritic"
+      PathDistCritic:
+        weight: 1.0
+        scale: 0.01
+
+    progress_checker_plugins: ["progress_checker"]
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+
+    goal_checker_plugins: ["goal_checker"]
+    goal_checker:
+      plugin: "nav2_controller::SimpleGoalChecker"
+
+    local_costmap:
+      ros__parameters:
+        global_frame: "odom"
+        robot_base_frame: "base_link"
+        plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+
+        static_layer:
+          plugin: "nav2_costmap_2d::StaticLayer"
+          map_topic: "/map_nav2"       # ← same static map here
+          subscribe_to_updates: False
+
+        obstacle_layer:
+          plugin: "nav2_costmap_2d::ObstacleLayer"
+          # (your obstacle settings here)
+
+        inflation_layer:
+          plugin: "nav2_costmap_2d::InflationLayer"
+          # (your inflation settings here)
+
+behavior_server:
+  ros__parameters:
+    use_sim_time: True
+
+bt_navigator:
+  ros__parameters:
+    use_sim_time: True
+    default_bt_xml: "navigate_w_replanning_time.xml"
+
+lifecycle_manager:
+  ros__parameters:
+    use_sim_time: True
+    autostart: True
+    node_names:
+      - planner_server
+      - controller_server
+      - behavior_server
+      - bt_navigator

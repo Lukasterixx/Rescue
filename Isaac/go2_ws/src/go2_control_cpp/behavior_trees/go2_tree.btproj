@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root BTCPP_format="4" project_name="Project">
+    <include path="go2_tree.xml"/>
+    <include path="minimal_nav_tree.xml"/>
+    <!-- Description of Node Models (used by Groot) -->
+    <TreeNodesModel>
+        <Action ID="ComputePathToPose" editable="true">
+            <input_port name="goal"/>
+            <input_port name="path"/>
+        </Action>
+        <Decorator ID="DistanceController" editable="true">
+            <input_port name="distance"/>
+        </Decorator>
+        <Action ID="FlattenPointCloudToMap2D">
+            <input_port name="resolution" default="0.1" type="double"/>
+            <input_port name="max_width_m" default="200.0" type="double"/>
+            <input_port name="max_height_m" default="200.0" type="double"/>
+            <input_port name="ground_height_threshold" default="0.2" type="double"/>
+            <input_port name="cloud_topic" default="/map" type="string"/>
+            <input_port name="pose_topic" default="/current_pose" type="string"/>
+            <input_port name="map2d_topic" default="/map2d" type="string"/>
+            <input_port name="queue_size" default="10" type="int"/>
+            <input_port name="publish_interval" default="5.0" type="double"/>
+            <input_port name="update_radius_m" default="20.0" type="double"/>
+        </Action>
+        <Action ID="FollowPath" editable="true">
+            <input_port name="path"/>
+        </Action>
+        <Action ID="Map2DSaver"/>
+        <Action ID="Nav2Launch">
+            <input_port name="param_file" type="string"/>
+        </Action>
+        <Condition ID="Permission"/>
+        <Control ID="PipelineSequence" editable="true"/>
+        <Action ID="SLAMLaunch"/>
+        <Action ID="WalkForward">
+            <input_port name="speed" default="0.5" type="double"/>
+            <input_port name="duration" default="2.0" type="double"/>
+        </Action>
+    </TreeNodesModel>
+</root>

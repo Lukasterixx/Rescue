@@ -1,0 +1,384 @@
+flatten_node:
+  ros__parameters:
+    resolution: 0.1
+    max_width_m: 200.0
+    max_height_m: 200.0
+    cloud_topic: "/glim_rosnode/points"
+    map2d_topic: "/map2d"
+    queue_size: 10
+    update_radius_m: 10.0
+    tick_rate_hz: 3.0
+    max_occ: 100
+    min_height_rel: 0.0
+    max_height_rel: 3.0
+
+walk_bt_node:
+  ros__parameters:
+    free_thresh:     0.25
+    occupied_thresh: 0.65
+    maps_dir:        "maps"
+    panels_face_left: false
+
+    table_height: 1.0
+    table_tilt: 17.0
+    unit_height: 2276.0
+    unit_width: 1134.0
+    unit_sep: 70.0
+
+    radius_m: 30.0
+    min_rect_area: 60
+    aspect_ratio: 1.5
+    occ_thresh: 65
+    backoff_from_frontier_m: 0.6
+    corridor_margin_m: 0.5
+    ray_step_deg: 3.0
+    panel_length_m: 68.0
+    inflation_block_at_cost: 1
+    los_thickness_m: 0.1
+    band_m: 7.0
+    fov_half_deg: 120.0
+    min_envelope_frontier_dist_m: 7.5
+    center_use_quadrature: true
+    los_min_frontier_dist_m: 1.5
+    los_escape_inflation_m: 1.5
+
+bt_go2:
+  ros__parameters:
+    use_sim_time:      True
+    global_frame:      odom
+    robot_base_frame:  livox_frame
+    odom_topic:        /odom
+    bt_loop_duration:  10
+    default_server_timeout: 20
+    
+    bt_tree_poses: poses.xml
+    bt_tree_pose: replanner_pose.xml
+
+    navigators: ['navigate_through_poses', 'navigate_to_pose']
+
+    # Single-pose navigator
+    navigate_to_pose:
+      plugin: "go2_control_navigator/Go2Navigator"
+
+    # Multi-pose navigator
+    navigate_through_poses:
+      plugin: "go2_control_navigator/NavigateThroughPosesNavigator"
+
+    plugin_lib_names:
+      - go2_flatten_pc2d_node
+      - go2_map2d_saver_node
+      - go2_permission_node
+      - go2_slam_launch_node
+      - go2_walk_forward_node
+      - go2_initial_pose_node
+      - go2_path_planner_node
+      - go2_nav2_ready_condition
+      - go2_new_goal_node
+      - nav2_compute_path_to_pose_action_bt_node
+      - nav2_compute_path_through_poses_action_bt_node
+      - nav2_smooth_path_action_bt_node
+      - nav2_follow_path_action_bt_node
+      - nav2_spin_action_bt_node
+      - nav2_wait_action_bt_node
+      - nav2_assisted_teleop_action_bt_node
+      - nav2_back_up_action_bt_node
+      - nav2_drive_on_heading_bt_node
+      - nav2_clear_costmap_service_bt_node
+      - nav2_is_stuck_condition_bt_node
+      - nav2_goal_reached_condition_bt_node
+      - nav2_goal_updated_condition_bt_node
+      - nav2_globally_updated_goal_condition_bt_node
+      - nav2_is_path_valid_condition_bt_node
+      - nav2_initial_pose_received_condition_bt_node
+      - nav2_reinitialize_global_localization_service_bt_node
+      - nav2_rate_controller_bt_node
+      - nav2_distance_controller_bt_node
+      - nav2_speed_controller_bt_node
+      - nav2_truncate_path_action_bt_node
+      - nav2_truncate_path_local_action_bt_node
+      - nav2_goal_updater_node_bt_node
+      - nav2_recovery_node_bt_node
+      - nav2_pipeline_sequence_bt_node
+      - nav2_round_robin_node_bt_node
+      - nav2_transform_available_condition_bt_node
+      - nav2_time_expired_condition_bt_node
+      - nav2_path_expiring_timer_condition
+      - nav2_distance_traveled_condition_bt_node
+      - nav2_single_trigger_bt_node
+      - nav2_goal_updated_controller_bt_node
+      - nav2_is_battery_low_condition_bt_node
+      - nav2_navigate_through_poses_action_bt_node
+      - nav2_navigate_to_pose_action_bt_node
+      - nav2_remove_passed_goals_action_bt_node
+      - nav2_planner_selector_bt_node
+      - nav2_controller_selector_bt_node
+      - nav2_goal_checker_selector_bt_node
+      - nav2_controller_cancel_bt_node
+      - nav2_path_longer_on_approach_bt_node
+      - nav2_wait_cancel_bt_node
+      - nav2_spin_cancel_bt_node
+      - nav2_back_up_cancel_bt_node
+      - nav2_assisted_teleop_cancel_bt_node
+      - nav2_drive_on_heading_cancel_bt_node
+      - nav2_is_battery_charging_condition_bt_node
+
+
+bt_navigator:
+  ros__parameters:
+    use_sim_time: True
+    global_frame: odom
+    robot_base_frame: livox_frame
+
+bt_navigator_navigate_through_poses_rclcpp_node:
+  ros__parameters:
+    use_sim_time: True
+    global_frame: odom
+    robot_base_frame: livox_frame
+
+bt_navigator_navigate_to_pose_rclcpp_node:
+  ros__parameters:
+    use_sim_time: True
+    global_frame: odom
+    robot_base_frame: livox_frame
+
+controller_server:
+  ros__parameters:
+    use_sim_time: True
+    controller_frequency: 20.0
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.01
+    min_theta_velocity_threshold: 0.001
+    failure_tolerance: 1.0
+    progress_checker_plugin: "progress_checker"
+    goal_checker_plugins: ["general_goal_checker"] # "precise_goal_checker"
+    controller_plugins: ["FollowPath"]
+
+    # Progress checker parameters
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      required_movement_radius: 1.0
+      movement_time_allowance: 30.0
+    # Goal checker parameters
+    #precise_goal_checker:
+    #  plugin: "nav2_controller::SimpleGoalChecker"
+    #  xy_goal_tolerance: 0.25
+    #  yaw_goal_tolerance: 0.25
+    #  stateful: True
+    general_goal_checker:
+      stateful: True
+      plugin: "nav2_controller::SimpleGoalChecker"
+      xy_goal_tolerance: 1.5
+      yaw_goal_tolerance: 1.2
+    # DWB parameters
+    FollowPath:
+      plugin: "dwb_core::DWBLocalPlanner"
+      debug_trajectory_details: True
+      min_vel_x: 1.0
+      min_vel_y: 0.0
+      max_vel_x: 1.1
+      max_vel_y: 1.1
+      max_vel_theta: 1.2
+      min_speed_xy: 0.0
+      max_speed_xy: 1.2
+      min_speed_theta: 0.0
+      acc_lim_x: 0.8
+      acc_lim_y: 0.8
+      acc_lim_theta: 1.0
+      decel_lim_x: -1.0
+      decel_lim_y: -1.0
+      decel_lim_theta: -1.0
+      vx_samples: 20
+      vy_samples: 10
+      vtheta_samples: 15
+      sim_time: 1.0
+      linear_granularity: 0.05
+      angular_granularity: 0.025
+      transform_tolerance: 10.0
+      xy_goal_tolerance: 1.0
+      trans_stopped_velocity: 0.25
+      short_circuit_trajectory_evaluation: True
+      stateful: True
+      critics: ["RotateToGoal", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist"]
+      BaseObstacle.scale: 0.02
+      PathAlign.scale: 32.0
+      PathAlign.forward_point_distance: 0.7
+      GoalAlign.scale: 24.0
+      GoalAlign.forward_point_distance: 0.5
+      PathDist.scale: 32.0
+      GoalDist.scale: 24.0
+      RotateToGoal.scale: 32.0
+      RotateToGoal.slowing_factor: 5.0
+      RotateToGoal.lookahead_time: -1.0
+
+velocity_smoother:
+  ros__parameters:
+    use_sim_time: True
+    smoothing_frequency: 20.0
+    scale_velocities: False
+    feedback: "OPEN_LOOP"
+    max_velocity: [1.2, 1.2, 1.0]
+    min_velocity: [-1.2, -1.0, -1.0]
+    max_accel: [1.0, 1.0, 1.0]
+    max_decel: [-1.0, -1.0, -1.0]
+    odom_topic: "odom"
+    odom_duration: 0.1
+    deadband_velocity: [0.0, 0.0, 0.0]
+    velocity_timeout: 1.0
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      update_frequency: 1.0
+      publish_frequency: 1.0
+      global_frame: odom
+      robot_base_frame: livox_frame
+      use_sim_time: True
+      rolling_window: true
+      width: 9
+      height: 9
+      resolution: 0.1
+      robot_radius: 0.3
+      plugins: ["voxel_layer", "inflation_layer", "static_layer"]
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 5.0
+        inflation_radius: 10.5
+      voxel_layer:
+        plugin: "nav2_costmap_2d::VoxelLayer"
+        enabled: false
+        publish_voxel_map: True
+        origin_z: 0.0
+        z_resolution: 0.05
+        z_voxels: 16
+        max_obstacle_height: 2.0
+        mark_threshold: 0
+        observation_sources: pointcloud
+        pointcloud:
+          topic: /glim_rosnode/points
+          data_type: "PointCloud2"
+          marking: true              # use the cloud to mark obstacles
+          clearing: true             # use it to clear freespace
+          max_obstacle_height: 2.0   # discard points above this (meters)
+          raytrace_max_range: 5.0     # how far to raytrace for freespace clearing
+          raytrace_min_range: 0.0
+          obstacle_max_range: 5.0    # ignore points beyond this when marking
+          obstacle_min_range: 0.0
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_topic: "/map2d"
+        subscribe_to_updates: true
+        map_subscribe_transient_local: true
+        track_unknown_space: true
+      always_send_full_costmap: True
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      update_frequency: 1.0
+      publish_frequency: 1.0
+      global_frame: odom
+      robot_base_frame: livox_frame
+      use_sim_time: True
+      robot_radius: 0.3
+      resolution: 0.1
+      track_unknown_space: false
+      plugins: ["static_layer", "inflation_layer"]
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_topic: "/map2d"
+        subscribe_to_updates: true
+        map_subscribe_transient_local: true
+        track_unknown_space: false
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 5.0
+        inflation_radius: 0.5
+      always_send_full_costmap: True
+
+map_saver:
+  ros__parameters:
+    use_sim_time: True
+    save_map_timeout: 5.0
+    free_thresh_default: 0.25
+    occupied_thresh_default: 0.65
+    map_subscribe_transient_local: True
+
+planner_server:
+  ros__parameters:
+    planner_plugins: ["GridBased"]
+    
+    GridBased:
+      plugin: "nav2_smac_planner/SmacPlanner2D" # <--- CHANGED: Hybrid -> 2D
+      tolerance: 0.2                     # slightly looser tolerance helps in tight rows
+      downsample_costmap: false          
+      downsampling_factor: 1             
+      allow_unknown: true                
+      max_iterations: -1             
+      max_on_approach_iterations: 1000   
+      max_planning_time: 5.0             
+      cost_travel_multiplier: 1.0
+      use_final_approach_orientation: true # Essential for aligning with your waypoints
+      smoother:
+        max_iterations: 1000
+        w_smooth: 0.3
+        w_data: 0.5
+        tolerance: 1.0e-4
+        do_refinement: true
+        refinement_num: 2
+
+smoother_server:
+  ros__parameters:
+    use_sim_time: True
+    smoother_plugins: ["simple_smoother"]
+    simple_smoother:
+      plugin: "nav2_smoother::SimpleSmoother"
+      tolerance: 1.0e-10
+      do_refinement: True
+      refinement_num: 2
+      max_its: 1000
+      w_data: 0.2
+      w_smooth: 0.3
+      enforce_path_inversion: True
+
+behavior_server:
+  ros__parameters:
+    costmap_topic: local_costmap/costmap_raw
+    footprint_topic: local_costmap/published_footprint
+    cycle_frequency: 10.0
+    behavior_plugins: ["spin", "backup", "drive_on_heading", "assisted_teleop", "wait"]
+    spin:
+      plugin: "nav2_behaviors/Spin"
+    backup:
+      plugin: "nav2_behaviors/BackUp"
+    drive_on_heading:
+      plugin: "nav2_behaviors/DriveOnHeading"
+    wait:
+      plugin: "nav2_behaviors/Wait"
+    assisted_teleop:
+      plugin: "nav2_behaviors/AssistedTeleop"
+    global_frame: odom
+    robot_base_frame: livox_frame
+    transform_tolerance: 10.0
+    use_sim_time: true
+    simulate_ahead_time: 2.0
+    max_rotational_vel: 1.0
+    min_rotational_vel: 0.4
+    rotational_acc_lim: 3.2
+
+robot_state_publisher:
+  ros__parameters:
+    use_sim_time: True
+
+waypoint_follower:
+  ros__parameters:
+    global_frame_id: odom
+    use_sim_time: True
+    loop_rate: 20
+    stop_on_failure: true
+    waypoint_task_executor_plugin: "wait_at_waypoint"
+    wait_at_waypoint:
+      plugin: "nav2_waypoint_follower::WaitAtWaypoint"
+      enabled: false
+      waypoint_pause_duration: 200
+
+

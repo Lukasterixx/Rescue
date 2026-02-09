@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root BTCPP_format="3" project_name="Project">
+    <include path="go2_tree.xml"/>
+    <!-- Description of Node Models (used by Groot) -->
+    <TreeNodesModel>
+        <Action ID="DataServer">
+            <input_port name="panels" default="{panels}" type="std::vector&lt;go2_control_cpp::Panel&gt;"/>
+            <input_port name="average_angle" default="{average_angle}" type="double"/>
+        </Action>
+        <Control ID="DistanceTickController">
+            <input_port name="dist_m" default="0.5" type="double"/>
+            <input_port name="global_frame" default="odom" type="string"/>
+            <input_port name="base_frame" default="livox_frame" type="string"/>
+            <input_port name="warmup_require_success" default="true" type="bool"/>
+        </Control>
+        <Action ID="FlattenPointCloudToMap2D">
+            <input_port name="resolution" default="0.1" type="double"/>
+            <input_port name="max_width_m" default="200.0" type="double"/>
+            <input_port name="max_height_m" default="200.0" type="double"/>
+            <input_port name="ground_height_threshold" default="0.2" type="double"/>
+            <input_port name="cloud_topic" default="/point_cloud2" type="string"/>
+            <input_port name="pose_topic" default="/current_pose" type="string"/>
+            <input_port name="map2d_topic" default="/map2d" type="string"/>
+            <input_port name="queue_size" default="10" type="int"/>
+            <input_port name="update_radius_m" default="20.0" type="double"/>
+            <input_port name="maps_dir" default="/home/lukas/P2Dingo/Isaac/go2_ws/src/go2_control_cpp/maps" type="string"/>
+        </Action>
+        <Action ID="FrontierExplore">
+            <input_port name="radius_m" default="30.0" type="double"/>
+            <input_port name="min_rect_area" default="100" type="int"/>
+            <input_port name="aspect_ratio" default="2.0" type="double"/>
+            <input_port name="occ_thresh" default="65" type="int"/>
+            <input_port name="inflation_block_at_cost" default="1" type="int"/>
+            <input_port name="global_frame" default="map" type="string"/>
+            <input_port name="base_frame" default="livox_frame" type="string"/>
+            <input_port name="los_thickness_m" default="0.1" type="double"/>
+        </Action>
+        <Action ID="InitialAlignment">
+            <input_port name="min_height" default="0.0" type="double"/>
+            <output_port name="alignment" default="{alignment}" type="go2_control_cpp::Alignment"/>
+            <output_port name="align_provided" default="{align_provided}" type="bool"/>
+        </Action>
+        <Action ID="InitialPose">
+            <input_port name="input_topic" default="/point_cloud2" type="string"/>
+            <input_port name="z_height" default="0.4" type="double"/>
+            <input_port name="seg_distance_threshold" default="0.1" type="double"/>
+            <input_port name="seg_axis_tolerance_deg" default="10.0" type="double"/>
+            <input_port name="seg_max_iterations" default="500" type="int"/>
+        </Action>
+        <Action ID="LocalizeSubmap">
+            <output_port name="map_to_map2d" default="{map_to_map2d}" type="geometry_msgs::msg::TransformStamped"/>
+        </Action>
+        <Action ID="Map2DSaver"/>
+        <Action ID="Nav2Launch">
+            <input_port name="param_file" type="string"/>
+        </Action>
+        <Control ID="Nav2Ready">
+            <input_port name="topic" default="/nav2_ready" type="string"/>
+        </Control>
+        <Decorator ID="NewGoal">
+            <input_port name="goal" default="{goal}" type="geometry_msgs::msg::PoseStamped"/>
+        </Decorator>
+        <Action ID="PathPlanner">
+            <input_port name="yaml_path" default="../maps/map2d.yaml" type="string"/>
+            <input_port name="pgm_path" default="../maps/map2dfull.pgm" type="string"/>
+            <input_port name="alignment" default="{alignment}" type="go2_control_cpp::Alignment"/>
+            <input_port name="align_provided" default="{align_provided}" type="bool"/>
+            <output_port name="average_angle" default="{average_angle}" type="double"/>
+            <output_port name="panels" default="{panels}" type="std::vector&lt;go2_control_cpp::Panel&gt;"/>
+        </Action>
+        <Condition ID="Permission"/>
+        <Control ID="RunOnce"/>
+        <Action ID="SLAMLaunch"/>
+        <Action ID="WalkForward" editable="true">
+            <input_port name="distance" default="10.0" type="double"/>
+            <output_port name="goal" type="geometry_msgs::msg::PoseStamped"/>
+        </Action>
+    </TreeNodesModel>
+</root>

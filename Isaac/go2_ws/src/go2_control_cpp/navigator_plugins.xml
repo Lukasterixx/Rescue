@@ -1,0 +1,16 @@
+<class_libraries>
+  <library path="go2_control_navigator">
+    <class
+      name="go2_control_navigator/Go2Navigator"
+      type="go2_control_navigator::Go2Navigator"
+      base_class_type="backported_bt_navigator::NavigatorBase">
+      <description>Minimal Go2 BT Navigator</description>
+    </class>
+  </library>
+
+  <library path="go2_control_navigator_poses">
+    <class name="go2_control_navigator/NavigateThroughPosesNavigator"
+          type="go2_control_navigator::NavigateThroughPosesNavigator"
+          base_class_type="backported_bt_navigator::NavigatorBase"/>
+  </library>
+</class_libraries>

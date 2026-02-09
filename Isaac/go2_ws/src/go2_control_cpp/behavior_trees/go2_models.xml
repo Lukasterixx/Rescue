@@ -1,0 +1,135 @@
+<root>
+  <TreeNodesModel>
+    <!-- Permission check condition -->
+    <Condition ID="Permission"/>
+
+     <!-- Walk-forward action: generates a goal and then a path -->
+    <Action ID="WalkForward" editable="true">
+      <input_port  name="distance" type="double" default="10.0" description="meters ahead to walk"/>
+      <output_port name="goal"     type="geometry_msgs::msg::PoseStamped" description="computed goal pose"/>
+    </Action>
+    <!-- SLAM launcher (no ports) -->
+    <Action ID="SLAMLaunch"/>
+
+    <!-- Nav2 bringup launcher -->
+    <Action ID="Nav2Launch">
+      <input_port name="param_file" type="string" default=""/>
+    </Action>
+
+    <Action ID="InitialPose">
+      <input_port name="input_topic"             type="string" default="/livox/lidr"/>
+      <input_port name="z_height"                type="double" default="0.4"/>
+      <input_port name="seg_distance_threshold"  type="double" default="0.1"/>
+      <input_port name="seg_axis_tolerance_deg"  type="double" default="10.0"/>
+      <input_port name="seg_max_iterations"      type="int"    default="500"/>
+    </Action>
+
+    <!-- InitialAlignment: save first filtered cloud or compute alignment -->
+    <Action ID="InitialAlignment">
+      <input_port  name="min_height" type="double" default="0.0" description="points below this z are filtered out"/>
+      <output_port name="alignment" type="go2_control_cpp::Alignment" default="{alignment}" description="computed translation + rotation"/>
+      <output_port name="align_provided" type="bool" default="{align_provided}" description="if alignment was computed"/>
+    </Action>
+
+  <!-- ← Simplified FlattenPointCloudToMap2D -->
+      <Action ID="FlattenPointCloudToMap2D">
+          <input_port name="resolution"               default="0.1"   type="double"/>
+          <input_port name="max_width_m"              default="200.0" type="double"/>
+          <input_port name="max_height_m"             default="200.0" type="double"/>
+          <input_port name="ground_height_threshold"  default="0.2"   type="double"/>
+          <input_port name="cloud_topic"              default="/glim_rosnode/points" type="string"/>
+          <input_port name="pose_topic"               default="/current_pose" type="string"/>
+          <input_port name="map2d_topic"              default="/map2d"        type="string"/>
+          <input_port name="queue_size"               default="10"           type="int"/>
+          <input_port name="update_radius_m"          default="20.0"         type="double"/>
+          <input_port 
+            name="maps_dir"  
+            default="/home/lukas/P2Dingo/Isaac/go2_ws/src/go2_control_cpp/maps" 
+            type="string"/>
+      </Action>
+    
+    <Action ID="Map2DSaver"/>
+
+    <Action ID="DataServer">
+        <input_port name="panels" 
+                    type="std::vector<go2_control_cpp::Panel>" 
+                    default="{panels}"
+                    description="Vector of Panel structs from PathPlanner"/>
+        <input_port name="average_angle" 
+                    type="double" 
+                    default="{average_angle}"/>
+        
+        <output_port name="current_panel" 
+                      type="go2_control_cpp::CurrentPanel" 
+                      default="{current_panel}"
+                      description="Struct containing ID, geometry (len/width), and scan settings"/>
+    </Action>
+
+    <Action ID="CameraController">
+          <input_port name="current_panel" 
+                    type="go2_control_cpp::CurrentPanel" 
+                    default="{current_panel}"
+                    description="Struct containing ID, geometry, and scan settings"/>
+    </Action>
+
+
+    <!-- LateralCollisionNode control node: ticks its children if near obstacle -->
+    <Control ID="LateralCollisionNode">
+      <input_port name="long_edge_indices" type="std::vector<int>" default="{long_edge_indices}" description="List of waypoints remaining counts that correspond to long edges"/>
+    </Control>
+    <!-- PathPlanner: panel detection & waypoint generation -->
+    <Action ID="PathPlanner">
+      <input_port  name="alignment"      type="go2_control_cpp::Alignment"         default="{alignment}"              description="computed translation + rotation"/>
+      <input_port  name="align_provided" type="bool"                                default="{align_provided}"         description="if alignment was computed"/>
+      <output_port name="average_angle"  type="double"                              default="{average_angle}"          description="Raw average panel angle (deg)"/>
+      <output_port name="panels"         type="std::vector<go2_control_cpp::Panel>" default="{panels}"                 description="Vector of detected Panel structs"/>
+      <output_port name="long_edge_indices"  type="std::vector<int>"              default="{long_edge_indices}"                 description="Vector of detected Panel structs"/>
+    </Action>
+
+    <!-- Nav2Ready control node -->
+    <Control ID="Nav2Ready">
+      <input_port name="topic" type="string" default="/nav2_ready" description="Topic name to wait for nav2 ready signal"/>
+    </Control>
+
+    <!-- ReturnToBaseAction returns robot to its charger -->
+    <Action ID="ReturnToBaseAction">
+      <input_port name="xy_tolerance"  type="double" default="0.3" description="Distance in meters to consider 'arrived'"/>
+      <input_port name="rot_speed"     type="double" default="1.0" description="Rotation speed in rad/s"/>
+      <input_port name="cmd_vel_topic" type="string" default="/robot0/cmd_vel" description="Topic for velocity commands"/>
+      <input_port name="robot_frame"   type="string" default="livox_frame" description="Frame attached to robot"/>
+      <input_port name="global_frame"  type="string" default="odom" description="Global frame (origin)"/>
+    </Action>
+
+    <!-- RunOnce control node: ticks its child exactly once -->
+    <Control ID="RunOnce"/>
+
+    <!-- LocalizeSubmap: align the live /map2d submap into the global map2d frame -->
+    <Action ID="LocalizeSubmap">
+      <input_port name="global_panels" type="std::vector<go2_control_cpp::Panel>" default="{panels}" description="List of pre-computed global panels"/>
+      <output_port name="map_to_map2d" type="geometry_msgs::msg::TransformStamped" default="{map_to_map2d}" description="computed transform from global map to live submap"/>
+    </Action>
+
+    <!-- NewGoal decorator: only ticks child when goal first arrives or changes -->
+    <Decorator ID="NewGoal">
+      <input_port 
+        name="goal" 
+        type="geometry_msgs::msg::PoseStamped" 
+        default="{goal}"
+        description="incoming goal to detect changes"/>
+    </Decorator>
+
+    <!-- FrontierExplore BT node: frontier-based exploration, avoiding long 2:1+ rows -->
+    <Action ID="FrontierExplore">
+      <input_port name="global_frame"   type="string" default="odom"  description="Global frame"/>
+      <input_port name="base_frame"     type="string" default="livox_frame" description="Robot base frame (TF)"/>
+    </Action>
+    
+    <!-- DistanceTickController: warm-up all children (until done), then tick once per distance -->
+    <Control ID="DistanceTickController">
+      <input_port name="dist_m"                type="double"  default="0.5"       description="Distance interval (m) to trigger children"/>
+      <input_port name="global_frame"          type="string"  default="odom"       description="TF global frame"/>
+      <input_port name="base_frame"            type="string"  default="livox_frame" description="TF base frame"/>
+      <input_port name="warmup_require_success" type="bool"    default="true"     description="If true, warm-up requires SUCCESS; if false, SUCCESS or FAILURE counts as done"/>
+    </Control>
+  </TreeNodesModel>
+</root>
