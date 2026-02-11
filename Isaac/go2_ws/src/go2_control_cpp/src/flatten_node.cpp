@@ -325,7 +325,7 @@ private:
                 
                 int c = occupancy_counts_[idx];
                 if (c < 0) c = 0;
-                c += 60; 
+                c += 300; 
                 if (c > max_occ_) c = max_occ_;
                 occupancy_counts_[idx] = (int8_t)c;
                 last_hit_tick_[idx] = tick_count_;
@@ -372,7 +372,7 @@ private:
 
             if (is_static) continue; 
 
-            c -= 1; 
+            c -= 0; 
             if (c < 0) c = 0;
             occupancy_counts_[idx] = (int8_t)c;
         }

@@ -169,10 +169,10 @@ controller_server:
     #  yaw_goal_tolerance: 0.25
     #  stateful: True
     general_goal_checker:
-      stateful: True
+      stateful: true
       plugin: "nav2_controller::SimpleGoalChecker"
       xy_goal_tolerance: 0.3
-      yaw_goal_tolerance: 0.1
+      yaw_goal_tolerance: 0.3
     # DWB parameters
     FollowPath:
       plugin: "dwb_core::DWBLocalPlanner"
@@ -203,7 +203,7 @@ controller_server:
       short_circuit_trajectory_evaluation: false
       stateful: True
       critics: ["RotateToGoal", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist"]
-      BaseObstacle.scale: 0.02
+      BaseObstacle.scale: 0.1
       PathAlign.scale: 32.0
       PathAlign.forward_point_distance: 0.2
       GoalAlign.scale: 24.0
@@ -211,7 +211,7 @@ controller_server:
       PathDist.scale: 32.0
       GoalDist.scale: 24.0
       RotateToGoal.scale: 32.0
-      RotateToGoal.slowing_factor: 5.0
+      RotateToGoal.slowing_factor: 1.0
       RotateToGoal.lookahead_time: -1.0
 
 velocity_smoother:
@@ -241,32 +241,12 @@ local_costmap:
       width: 9
       height: 9
       resolution: 0.1
-      robot_radius: 0.3
-      plugins: ["voxel_layer", "inflation_layer", "static_layer"]
+      robot_radius: 0.15
+      plugins: ["inflation_layer", "static_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 5.0
-        inflation_radius: 10.5
-      voxel_layer:
-        plugin: "nav2_costmap_2d::VoxelLayer"
-        enabled: false
-        publish_voxel_map: True
-        origin_z: 0.0
-        z_resolution: 0.05
-        z_voxels: 16
-        max_obstacle_height: 2.0
-        mark_threshold: 0
-        observation_sources: pointcloud
-        pointcloud:
-          topic: /glim_rosnode/points
-          data_type: "PointCloud2"
-          marking: true              # use the cloud to mark obstacles
-          clearing: true             # use it to clear freespace
-          max_obstacle_height: 2.0   # discard points above this (meters)
-          raytrace_max_range: 5.0     # how far to raytrace for freespace clearing
-          raytrace_min_range: 0.0
-          obstacle_max_range: 5.0    # ignore points beyond this when marking
-          obstacle_min_range: 0.0
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.1
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_topic: "/map2d"
@@ -282,6 +262,8 @@ global_costmap:
       publish_frequency: 1.0
       global_frame: odom
       robot_base_frame: livox_frame
+      inscribed_obstacle_cost_value: 10
+      trinary_costmap: false
       use_sim_time: True
       robot_radius: 0.3
       resolution: 0.1
@@ -295,8 +277,8 @@ global_costmap:
         track_unknown_space: false
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 5.0
-        inflation_radius: 0.5
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.4
       always_send_full_costmap: True
 
 map_saver:

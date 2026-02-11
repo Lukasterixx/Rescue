@@ -516,7 +516,7 @@ class RobotBaseNode(Node):
 
         joint_state_names_formated = []
         for joint_name in joint_names_lst:
-            joint_state_names_formated.append(f"robot{robot_num}/"+joint_name)
+            joint_state_names_formated.append(joint_name)
 
         joint_state_formated = []
         for joint_state_val in joint_state_lst:

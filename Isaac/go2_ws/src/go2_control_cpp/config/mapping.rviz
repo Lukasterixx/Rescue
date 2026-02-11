@@ -437,7 +437,7 @@ Visualization Manager:
           Value: true
         units:
           Value: true
-      Marker Scale: 5
+      Marker Scale: 1
       Name: TF
       Show Arrows: true
       Show Axes: true
