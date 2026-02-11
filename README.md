@@ -4,11 +4,11 @@
 [![IsaacLab](https://img.shields.io/badge/IsaacLab-0.3.0-purple.svg)](https://docs.omniverse.nvidia.com/isaacsim/latest/overview.html)
 [![Linux platform](https://img.shields.io/badge/platform-Ubuntu--22.04-green.svg)](https://releases.ubuntu.com/22.04/)
 
-Welcome to the P2Dingo Repo, here you will find the source code for the autonomous SLAM quadruped first simulated on Isaac Sim with ros2 and then deployed on a Unitree Go2 EDU
+Welcome to the Rescue Repo, here you will find the source code for the autonomous SLAM quadruped first simulated on Isaac Sim with ros2 and then deployed on a Unitree Go2 EDU
 
 ## Requirements
-1. Nvidia RTX 20 series or newer
-2. Minimum 70gb of storage on Ubunutu 22.04
+1. Nvidia RTX 20 series or newer (4070/4080 tested)
+2. Minimum 100gb of storage on Ubunutu 22.04
 3. Ros2 Humble
 4. IsaacSim 4.1
 5. IsaacLab 0.3.1 (orbit)
@@ -160,28 +160,28 @@ sim() {
     # (optional) ensure Humble is sourced if your shell hasn't already
     # source /opt/ros/humble/setup.bash
 
-    cd ~/P2Dingo/Isaac/go2_omniverse && ./run_sim.sh
+    cd ~/Rescue/Isaac/go2_omniverse && ./run_sim.sh
   )
 }
 
 slam() {
   use_fastrtps
-  cd ~/P2Dingo/Isaac/go2_ws || return
+  cd ~/Rescue/Isaac/go2_ws || return
 
   source install/setup.bash
 
   # Start RViz2 in the background and capture PID
-  rviz2 -d ~/P2Dingo/Isaac/go2_ws/src/go2_control_cpp/config/mapping.rviz &
+  rviz2 -d ~/Rescue/Isaac/go2_ws/src/go2_control_cpp/config/mapping.rviz &
   RVIZ_PID=$!
 
   # Run ros2 launch in the foreground (interactive)
   ros2 launch go2_control_cpp minimal_bt_launch_sim.py
 }
 ```
-**Step VII:** Install all ros2 dependancies to build code in `~/P2Dingo/Isaac/go2_ws` 
+**Step VII:** Install all ros2 dependancies to build code in `~/Rescue/Isaac/go2_ws` 
 
 ```
-cd ~/P2Dingo/Isaac/go2_ws
+cd ~/Rescue/Isaac/go2_ws
 conda deactivate
 sudo rosdep init || true
 rosdep update
@@ -196,17 +196,14 @@ You may have to adjust the dependancy of streamsdk if errors appear:
 code ~/IsaacLab/source/apps/orbit.python.kit
 "omni.kit.streamsdk.plugins" = {version = "2.5.1", exact = true}
 ```
-Open `FarmReal.usd` from ~/P2Digno/Isaac/go2_omniverse/envs/FarmReal in Isaac Sim:
+Open `FarmReal.usd` from ~/Rescue/Isaac/go2_omniverse/envs/FarmReal in Isaac Sim:
 ```
 cd ~/isaacsim
 ./isaac-sim.selector.sh
 # make sure you enable ros2 humble bridge (not deprecated version)
 ```
-Export FLATTENED USD to ~/P2Digno/Isaac/go2_omniverse/envs `rotate.usd`. This should Allow the launcher script to attach materials and props to the world.
+Export FLATTENED USD to ~/Rescue/Isaac/go2_omniverse/envs `rotate.usd`. This should Allow the launcher script to attach materials and props to the world.
 
-Copy Unitree_L1.json (located in go2_omniverse/Isaac_sim/Unitree/Unitree_L1.json) to:
-```
-mkdir -p /home/lukas/IsaacLab/source/exts/omni.isaac.sensor/data/lidar_configs
 ```
 If dependancies for isaac lab are missing its because the setup failed to install them onto the sim's Kit python, fix with this: 
 ```
@@ -288,7 +285,7 @@ If you installed the unitree_ros2 robot sdk cyclonedds will complain whenever th
 1. Open new terminal and enter `sim`.
 2. Once loaded, move the robot around if desired, create obstacles with `create->shape->` in the top left GUI
 3. in the `Orbit` panel, set `Follow Mode` to `Robot` for the camera to follow the robot around
-4. Open another terminal, enter `slam` to run the go2_control_cpp code for P2Dingo. If no `map2d.pgm` exists in share/go2_control_cpp/map, it will begin in exploration mode and create the map. If `map2d.pgm` does exist, it will pathplan on it and begin routine scans
+4. Open another terminal, enter `slam` to run the go2_control_cpp code for Rescue. If no `map2d.pgm` exists in share/go2_control_cpp/map, it will begin in exploration mode and create the map. If `map2d.pgm` does exist, it will pathplan on it and begin routine scans
 
 ## Adding a new node
 1. Write your cpp in `/src/`, and hpp in `include/go2_control_cpp/`.
@@ -387,4 +384,4 @@ Open `/go2_control_cpp/behaviour_trees/go2_tree` (top left next to project)
 Import `/go2_control_cpp/behaviour_trees/go2_models` (right side of the models tab)
 
 8. Drag and drop your node, connect it with a wire, then make sure to right click on the project and press save (this updates go2_tree.xml)
-9. Now open a new terminal in `~/P2Dingo/Isaac/go2_ws` and colcon build
+9. Now open a new terminal in `~/Rescue/Isaac/go2_ws` and colcon build

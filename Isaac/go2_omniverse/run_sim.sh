@@ -39,6 +39,11 @@ conda activate orbit
 export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libstdc++.so.6
 export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/lukas/isaacsim/kit
 
+# NEW: Ensure Lidar Config Directory exists and copy the Unitree L1 config
+# This uses mkdir -p to avoid errors if the dir exists, and cp overwrites by default.
+mkdir -p /home/lukas/IsaacLab/source/exts/omni.isaac.sensor/data/lidar_configs
+cp /home/lukas/Rescue/Isaac/go2_omniverse/Isaac_sim/Unitree/Unitree_L1.json /home/lukas/IsaacLab/source/exts/omni.isaac.sensor/data/lidar_configs/
+
 # NEW: Set Isaac Sim paths
 export ISAAC_PATH=/home/lukas/isaacsim
 export EXP_PATH=$ISAAC_PATH/apps/omni.isaac.sim.python.kit

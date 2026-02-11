@@ -31,16 +31,16 @@
       
       "comment14" : "These add noise to the emitter direction to each point randomly if Std is not 0.0",
       "azimuthErrorMean": 0.0,
-      "azimuthErrorStd": 0.001, "comment15" : "OPTICAL PERFORMANCE-Angular Sampling Accuracy Horizontal: ±0.01°",
+      "azimuthErrorStd": 0.01, "comment15" : "OPTICAL PERFORMANCE-Angular Sampling Accuracy Horizontal: ±0.01°",
       "elevationErrorMean": 0.0,
-      "elevationErrorStd": 0.001, "comment16" : "OPTICAL PERFORMANCE-Angular Sampling Accuracy Vertical: ±0.01°",
+      "elevationErrorStd": 0.01, "comment16" : "OPTICAL PERFORMANCE-Angular Sampling Accuracy Vertical: ±0.01°",
       
       "maxReturns": 2,
       
-      "scanRateBaseHz": 10.0,
+      "scanRateBaseHz": 100.0,
       
       "reportRateBaseHz": 10240,
-      "rotationDirection": "CW",
+      
       "numberOfEmitters": 128,
       
       "emitters":

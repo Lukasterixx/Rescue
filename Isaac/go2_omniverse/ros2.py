@@ -32,6 +32,7 @@ import omni.isaac.orbit.sim as sim_utils
 from scipy.spatial.transform import Rotation
 from PIL import Image
 import datetime
+import os
 from ament_index_python.packages import get_package_share_directory
 
 DISABLE_RING_AND_TIME = True    # fast mode
@@ -363,11 +364,20 @@ class RobotBaseNode(Node):
         # Updated topic name and message type to String
         self.create_subscription(String, '/photo_request_str', self._photo_req_cb, 10)
 
-        import os
+        try:
+            # Dynamically find the share directory for go2_control_cpp
+            pkg_share = get_package_share_directory('go2_control_cpp')
+            
+            # Construct path to config/Unitree_L1.json in the share directory
+            self.lidar_json_path = os.path.join(pkg_share, 'Unitree_L1.json')
+            
+            self.get_logger().info(f"Loading LiDAR config from: {self.lidar_json_path}")
+            
+        except Exception as e:
+            self.get_logger().error(f"Failed to resolve package path: {e}")
+            # Fallback for local testing if package isn't installed
+            self.lidar_json_path = "config/Unitree_L1.json"
 
-        self.lidar_json_path = os.path.expanduser(
-            "~/P2Dingo/Isaac/go2_omniverse/Isaac_sim/Unitree/Unitree_L1.json"
-        )
         self.lidar_cfg = load_lidar_json(self.lidar_json_path)
 
         self.joint_pub = []
