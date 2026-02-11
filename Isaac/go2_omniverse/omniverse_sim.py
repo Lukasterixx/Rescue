@@ -135,9 +135,9 @@ def _robotMeters_to_stageUnits_vec3(robot_m: Gf.Vec3d) -> Gf.Vec3d:
     up = 'Y'
 
     # Scale meters -> stage units
-    x_u = robot_m[0] / mpu * 100
-    y_u = robot_m[1] / mpu * 100
-    z_u = robot_m[2] / mpu * 100
+    x_u = robot_m[0] / mpu
+    y_u = robot_m[1] / mpu
+    z_u = robot_m[2] / mpu
 
     if up == 'Y':
         # Stage axes are X,Y,Z with Y-up; robot is Z-up.
@@ -544,16 +544,28 @@ def run_sim():
     obs, _ = env.get_observations()
 
     # sensors + env USD
-    # annotator_lst = add_rtx_lidar(env_cfg.scene.num_envs, args_cli.robot, False)
     annotator_lst = add_rtx_lidar(env_cfg.scene.num_envs, args_cli.robot, False)    
     camera_lst = add_camera(env_cfg.scene.num_envs, args_cli.robot)
     setup_custom_env()
 
     # --- MAZE INIT ---
     maze_manager = None
+    last_maze_update_pos = None
+
     if args_cli.custom_env == "maze":
         stage = omni.usd.get_context().get_stage()
+        # Create maze manager
         maze_manager = MazeManager(stage, start_pos=(0,0,0), grid_radius=12)
+        
+        # --- NEW: Initial Full Generation ---
+        # We try to get the robot position immediately. If not available, we assume (0,0,0).
+        init_pos = _get_robot_world_pos()
+        if init_pos is None: 
+            init_pos = Gf.Vec3d(0,0,0)
+        
+        print("[Maze] Forcing initial full generation...")
+        maze_manager.update(init_pos, force_complete=True)
+        last_maze_update_pos = init_pos
     # -----------------
 
     stage = omni.usd.get_context().get_stage()
@@ -579,13 +591,8 @@ def run_sim():
     save_vis_checkpoint()
 
     # --- OPTIMIZATION VARIABLES ---
-    last_maze_update_pos = None
     ros_step_counter = 0
-    # Run ROS publishing every 2 steps (25Hz) instead of every step (50Hz)
-    # This significantly reduces CPU overhead from Python/ROS serialization
     ros_decimation = 1
-    # ------------------------------
-
     next_deadline = time.monotonic() + 0.1
     
     while simulation_app.is_running():
@@ -594,15 +601,19 @@ def run_sim():
             rob_pos = _get_robot_world_pos() 
             if rob_pos:
                 should_update = False
+                
+                # Check distance (throttle to 0.5m)
                 if last_maze_update_pos is None:
                     should_update = True
                 else:
                     dist = (rob_pos - last_maze_update_pos).GetLength()
-                    if dist > 0.5: # Only update every 1 meter
+                    # Updated to exactly 0.5m as requested
+                    if dist >= 0.5: 
                         should_update = True
                 
                 if should_update:
-                    maze_manager.update(rob_pos)
+                    # Normal update (incremental growing if needed, though initial forced it full)
+                    maze_manager.update(rob_pos, force_complete=False)
                     last_maze_update_pos = rob_pos
         # -----------------------------
 

@@ -46,7 +46,7 @@ public:
     this->declare_parameter<int>("max_occ", 100);
     // How often to force a full map publish for custom nodes (every N ticks)
     // 3.0Hz tick / 6 = 0.5Hz full update
-    this->declare_parameter<int>("full_map_publish_every_n_ticks", 6);
+    this->declare_parameter<int>("full_map_publish_every_n_ticks", 3);
 
     this->declare_parameter<double>("min_height_rel", 0.0);  
     this->declare_parameter<double>("max_height_rel", 2.5);
@@ -325,7 +325,7 @@ private:
                 
                 int c = occupancy_counts_[idx];
                 if (c < 0) c = 0;
-                c += 20; 
+                c += 60; 
                 if (c > max_occ_) c = max_occ_;
                 occupancy_counts_[idx] = (int8_t)c;
                 last_hit_tick_[idx] = tick_count_;

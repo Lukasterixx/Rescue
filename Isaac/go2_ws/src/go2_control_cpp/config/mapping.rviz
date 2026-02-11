@@ -20,7 +20,7 @@ Panels:
         - /Pose3
         - /Map4
       Splitter Ratio: 0.5
-    Tree Height: 978
+    Tree Height: 276
   - Class: rviz_common/Selection
     Name: Selection
   - Class: rviz_common/Tool Properties
@@ -67,16 +67,16 @@ Visualization Manager:
       Channel Name: intensity
       Class: rviz_default_plugins/PointCloud2
       Color: 255; 255; 255
-      Color Transformer: ""
+      Color Transformer: Intensity
       Decay Time: 3
-      Enabled: true
+      Enabled: false
       Invert Rainbow: false
       Max Color: 255; 255; 255
-      Max Intensity: 0.33678507804870605
+      Max Intensity: 0.29751095175743103
       Min Color: 0; 0; 0
-      Min Intensity: 0.004903205204755068
+      Min Intensity: 0.004996706731617451
       Name: PointCloud2
-      Position Transformer: ""
+      Position Transformer: XYZ
       Selectable: false
       Size (Pixels): 3
       Size (m): 0.05000000074505806
@@ -90,7 +90,7 @@ Visualization Manager:
         Value: /glim_rosnode/points
       Use Fixed Frame: true
       Use rainbow: true
-      Value: true
+      Value: false
     - Alpha: 1
       Axes Length: 1
       Axes Radius: 0.10000000149011612
@@ -389,11 +389,7 @@ Visualization Manager:
       Enabled: true
       Name: MarkerArray
       Namespaces:
-        cluster_perimeter: true
-        detected_rects: true
-        envelope_outline: true
-        envelope_union: true
-        extended_rects: true
+        {}
       Topic:
         Depth: 5
         Durability Policy: Volatile
@@ -447,12 +443,12 @@ Visualization Manager:
       Show Axes: true
       Show Names: false
       Tree:
-        map:
-          {}
         odom:
           livox_frame:
             base_link:
               {}
+          map:
+            {}
           map2d:
             map2dglobal:
               {}
@@ -545,25 +541,25 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 25.747133255004883
+      Distance: 16.727325439453125
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: 3.9838595390319824
-        Y: -1.1821008920669556
-        Z: 3.042478561401367
+        X: -0.7577399611473083
+        Y: 0.29485511779785156
+        Z: -0.2184985876083374
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.3147948384284973
+      Pitch: 1.2147940397262573
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
-      Yaw: 2.9604995250701904
+      Yaw: 2.005483627319336
     Saved:
       - Class: rviz_default_plugins/Orbit
         Distance: 50.98590087890625
@@ -585,3 +581,4 @@ Visualization Manager:
         Target Frame: <Fixed Frame>
         Value: Orbit (rviz)
         Yaw: 2.790515184402466
+

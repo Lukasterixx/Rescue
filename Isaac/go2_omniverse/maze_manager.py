@@ -27,7 +27,7 @@ class MazeManager:
             self._add_neighbors_to_frontier(cell[0], cell[1])
 
         # --- Object Pooling ---
-        self.root_path = "/World/Maze"
+        self.root_path = "/World/warehouse/Maze"
         self.pool_size = 800  
         self.wall_pool = []
         self.active_walls_map = {} 
@@ -35,38 +35,72 @@ class MazeManager:
         self._init_usd_pool()
 
     def _init_usd_pool(self):
-        """Creates a pool of walls with compliant SRT order."""
+        """Creates a pool of walls with compliant SRT order and Window variants."""
+        if not self.stage.GetPrimAtPath("/World/warehouse"):
+            UsdGeom.Xform.Define(self.stage, "/World/warehouse")
+
         if not self.stage.GetPrimAtPath(self.root_path):
             UsdGeom.Xform.Define(self.stage, self.root_path)
         
-        print(f"[Maze] Initializing pool of {self.pool_size} walls...")
+        print(f"[Maze] Initializing pool of {self.pool_size} walls (Solid + Window variants)...")
         
         for i in range(self.pool_size):
-            path = f"{self.root_path}/Wall_{i}"
-            self.wall_pool.append(path)
+            wall_path = f"{self.root_path}/Wall_{i}"
+            self.wall_pool.append(wall_path)
             
-            cube = UsdGeom.Cube.Define(self.stage, path)
-            UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
+            # 1. Create Main Container Xform
+            wall_xform = UsdGeom.Xform.Define(self.stage, wall_path)
             
-            # --- CRITICAL FIX: Force Cube size to 1.0 (Default is 2.0) ---
-            cube.GetSizeAttr().Set(1.0)
-            # -------------------------------------------------------------
+            # Apply Default Transforms (Identity)
+            xform_api = UsdGeom.Xformable(wall_xform)
+            xform_api.AddTranslateOp()     
+            xform_api.AddRotateXYZOp()     
+            xform_api.AddScaleOp()         
 
-            xform = UsdGeom.Xformable(cube)
-            xform.AddTranslateOp()     
-            xform.AddRotateXYZOp()     
-            xform.AddScaleOp()         
+            # 2. Create SOLID Wall Variant (Standard Cube)
+            solid_path = f"{wall_path}/Solid"
+            solid_cube = UsdGeom.Cube.Define(self.stage, solid_path)
+            solid_cube.GetSizeAttr().Set(1.0)
+            UsdPhysics.CollisionAPI.Apply(solid_cube.GetPrim())
+
+            # 3. Create WINDOW Wall Variant (Group of 4 Cubes)
+            win_path = f"{wall_path}/Window"
+            UsdGeom.Xform.Define(self.stage, win_path)
             
-            self._reset_wall(path)
+            # Geometry Math: Wall is 1x1 (-0.5 to 0.5). Window is 0.5x0.5 centered.
+            # We need 4 pieces: Bottom, Top, Left, Right.
+            
+            # Bottom Piece (Y: -0.5 to 0.5, Z: -0.5 to -0.25) -> Center Z: -0.375, Scale Z: 0.25
+            self._create_sub_cube(f"{win_path}/Bottom", 0, 0, -0.375, 1.0, 1.0, 0.25)
+            # Top Piece (Y: -0.5 to 0.5, Z: 0.25 to 0.5) -> Center Z: 0.375, Scale Z: 0.25
+            self._create_sub_cube(f"{win_path}/Top", 0, 0, 0.375, 1.0, 1.0, 0.25)
+            # Left Piece (Y: -0.5 to -0.25, Z: -0.25 to 0.25) -> Center Y: -0.375, Scale Y: 0.25, Scale Z: 0.5
+            self._create_sub_cube(f"{win_path}/Left", 0, -0.375, 0, 1.0, 0.25, 0.5)
+            # Right Piece (Y: 0.25 to 0.5, Z: -0.25 to 0.25) -> Center Y: 0.375, Scale Y: 0.25, Scale Z: 0.5
+            self._create_sub_cube(f"{win_path}/Right", 0, 0.375, 0, 1.0, 0.25, 0.5)
+
+            # Reset to holding area
+            self._reset_wall(wall_path)
+
+    def _create_sub_cube(self, path, x, y, z, sx, sy, sz):
+        """Helper to create a collision-enabled cube part for the window frame."""
+        cube = UsdGeom.Cube.Define(self.stage, path)
+        cube.GetSizeAttr().Set(1.0)
+        UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
+        
+        xform = UsdGeom.Xformable(cube)
+        xform.AddTranslateOp().Set(Gf.Vec3d(x, y, z))
+        xform.AddScaleOp().Set(Gf.Vec3d(sx, sy, sz))
 
     def _reset_wall(self, prim_path):
-        """Moves a wall to the holding area (underground)."""
+        """Moves a wall to the holding area and hides it."""
         prim = self.stage.GetPrimAtPath(prim_path)
         if not prim.IsValid(): return
         UsdGeom.Imageable(prim).MakeInvisible()
+        
         xform = UsdGeom.Xformable(prim)
         ops = xform.GetOrderedXformOps()
-        ops[0].Set(Gf.Vec3d(0, 0, -100.0)) 
+        ops[0].Set(Gf.Vec3d(0, 0, -100.0)) # Hide underground
         ops[1].Set(Gf.Vec3d(0, 0, 0))      
         ops[2].Set(Gf.Vec3d(1.0, 1.0, 1.0))
 
@@ -84,11 +118,11 @@ class MazeManager:
     def _has_passage(self, cell_a, cell_b):
         return tuple(sorted((cell_a, cell_b))) in self.passages
 
-    def _grow_maze(self, target_x, target_y):
+    def _grow_maze(self, target_x, target_y, force_complete=False):
         steps = 0
-        max_steps_per_frame = 30 
+        max_steps = 999999 if force_complete else 30 
         
-        while steps < max_steps_per_frame:
+        while steps < max_steps:
             local_frontier = [
                 (fx, fy) for fx, fy in self.frontier 
                 if abs(fx - target_x) <= self.grid_radius + 2 
@@ -112,7 +146,6 @@ class MazeManager:
                 self.open_cells.add((cx, cy))
                 self._add_neighbors_to_frontier(cx, cy)
 
-                # Connect to ONE neighbor (strict maze) or chance for loop
                 if random.random() < 0.05: 
                     for n in open_neighbors:
                          if random.random() < 0.5: self._add_passage((cx, cy), n)
@@ -122,12 +155,12 @@ class MazeManager:
             
             steps += 1
 
-    def update(self, robot_pos_3d):
+    def update(self, robot_pos_3d, force_complete=False):
         rx = int(round(robot_pos_3d[0] / self.tile_size))
         ry = int(round(robot_pos_3d[1] / self.tile_size))
 
         # 1. Grow Maze
-        self._grow_maze(rx, ry)
+        self._grow_maze(rx, ry, force_complete=force_complete)
         
         # 2. Determine Walls Needed
         needed_walls = set()
@@ -136,28 +169,10 @@ class MazeManager:
         for x in range(rx - r, rx + r + 1):
             for y in range(ry - r, ry + r + 1):
                 if (x, y) in self.open_cells:
-                    
-                    # LOGIC: Wall needed if neighbor is not open OR no passage exists
-                    
-                    # East (x+1)
-                    neighbor = (x + 1, y)
-                    if neighbor not in self.open_cells or not self._has_passage((x, y), neighbor):
-                        needed_walls.add((x, y, 'E'))
-                    
-                    # West (x-1)
-                    neighbor = (x - 1, y)
-                    if neighbor not in self.open_cells or not self._has_passage((x, y), neighbor):
-                        needed_walls.add((x, y, 'W'))
-
-                    # North (y+1)
-                    neighbor = (x, y + 1)
-                    if neighbor not in self.open_cells or not self._has_passage((x, y), neighbor):
-                        needed_walls.add((x, y, 'N'))
-
-                    # South (y-1)
-                    neighbor = (x, y - 1)
-                    if neighbor not in self.open_cells or not self._has_passage((x, y), neighbor):
-                        needed_walls.add((x, y, 'S'))
+                    for dx, dy, direction in [(1,0,'E'), (-1,0,'W'), (0,1,'N'), (0,-1,'S')]:
+                        neighbor = (x + dx, y + dy)
+                        if neighbor not in self.open_cells or not self._has_passage((x, y), neighbor):
+                            needed_walls.add((x, y, direction))
 
         # 3. Garbage Collection
         active_keys = list(self.active_walls_map.keys())
@@ -186,8 +201,26 @@ class MazeManager:
         prim = self.stage.GetPrimAtPath(prim_path)
         if not prim.IsValid(): return
         
+        # Make Main Xform Visible
         UsdGeom.Imageable(prim).MakeVisible()
         
+        # --- Randomly Select Wall Type (Solid vs Window) ---
+        # Get Child Prims
+        solid_prim = self.stage.GetPrimAtPath(f"{prim_path}/Solid")
+        window_prim = self.stage.GetPrimAtPath(f"{prim_path}/Window")
+        
+        # 20% Chance for Window, 80% Chance for Solid
+        is_window = random.random() < 0.20
+        
+        if is_window:
+            UsdGeom.Imageable(solid_prim).MakeInvisible()
+            UsdGeom.Imageable(window_prim).MakeVisible()
+        else:
+            UsdGeom.Imageable(solid_prim).MakeVisible()
+            UsdGeom.Imageable(window_prim).MakeInvisible()
+        # ---------------------------------------------------
+
+        # Position Logic (Unchanged, operates on Parent Xform)
         xform = UsdGeom.Xformable(prim)
         ops = xform.GetOrderedXformOps()
         

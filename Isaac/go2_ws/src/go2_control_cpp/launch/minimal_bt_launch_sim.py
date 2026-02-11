@@ -53,21 +53,6 @@ def generate_launch_description():
         allow_substs=True,
     )
 
-   
-    # GLIM SLAM (either internal node or external Docker)
-    if glim_available():
-        # Case 1: GLIM is built in this workspace (e.g. on the Go2)
-        glim_node = Node(
-            package='glim_ros',
-            executable='glim_rosnode',
-            name='glim_rosnode',
-            output='screen',
-            parameters=[{
-                'config_path': os.path.join(pkg_share, 'glim_config'),
-            }],
-        )
-        ld.add_action(glim_node)
-
     
     # Line‐buffered logging
     stdout_linebuf_envvar = SetEnvironmentVariable(
@@ -220,5 +205,5 @@ def generate_launch_description():
     ld.add_action(flatten_node)
     ld.add_action(container)
     ld.add_action(load_composables)
-    ld.add_action(walk_bt)
+    # ld.add_action(walk_bt)
     return ld
