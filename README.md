@@ -149,34 +149,6 @@ and some helper functions:
 # --- DDS toggle helpers (optional) ---
 use_cyclonedds() { export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp; echo "DDS: CycloneDDS"; }
 use_fastrtps()   { unset CYCLONEDDS_URI CYCLONEDDS_HOME CYCLONEDDS_CONFIG; export RMW_IMPLEMENTATION=rmw_fastrtps_cpp; echo "DDS: Fast DDS"; }
-
-# Run Isaac sim with Fast DDS regardless of current shell env
-sim() {
-  (
-    # Force Fast DDS for this subshell only
-    unset CYCLONEDDS_URI CYCLONEDDS_HOME CYCLONEDDS_CONFIG
-    export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
-
-    # (optional) ensure Humble is sourced if your shell hasn't already
-    # source /opt/ros/humble/setup.bash
-
-    cd ~/Rescue/Isaac/go2_omniverse && ./run_sim.sh
-  )
-}
-
-slam() {
-  use_fastrtps
-  cd ~/Rescue/Isaac/go2_ws || return
-
-  source install/setup.bash
-
-  # Start RViz2 in the background and capture PID
-  rviz2 -d ~/Rescue/Isaac/go2_ws/src/go2_control_cpp/config/mapping.rviz &
-  RVIZ_PID=$!
-
-  # Run ros2 launch in the foreground (interactive)
-  ros2 launch go2_control_cpp minimal_bt_launch_sim.py
-}
 ```
 **Step VII:** Install all ros2 dependancies to build code in `~/Rescue/Isaac/go2_ws` 
 
@@ -202,9 +174,7 @@ cd ~/isaacsim
 ./isaac-sim.selector.sh
 # make sure you enable ros2 humble bridge (not deprecated version)
 ```
-Export FLATTENED USD to ~/Rescue/Isaac/go2_omniverse/envs `rotate.usd`. This should Allow the launcher script to attach materials and props to the world.
-
-```
+Export FLATTENED USD to ~/Rescue/Isaac/go2_omniverse/envs `rotate.usd`. This should Allow the launcher script to attach materials and props to the world
 If dependancies for isaac lab are missing its because the setup failed to install them onto the sim's Kit python, fix with this: 
 ```
 # --- Use KIT'S embedded Python everywhere ---
@@ -385,3 +355,43 @@ Import `/go2_control_cpp/behaviour_trees/go2_models` (right side of the models t
 
 8. Drag and drop your node, connect it with a wire, then make sure to right click on the project and press save (this updates go2_tree.xml)
 9. Now open a new terminal in `~/Rescue/Isaac/go2_ws` and colcon build
+
+Here are some helper functions to start the sim and nav code (place in your ~/.bashrc): 
+
+```
+rvizz() {
+    use_fastrtps
+    ros2 launch go2_control_cpp visualize_go2.launch.py
+}
+
+nav() {
+  use_fastrtps
+  cd ~/Rescue/Isaac/go2_ws || return
+
+  source install/setup.bash
+
+  rm ~/Rescue/Isaac/go2_ws/install/go2_control_cpp/share/go2_control_cpp/maps/map2d.pgm
+
+
+  # Start RViz2 in the background and capture PID
+  rvizz &
+  RVIZ_PID=$!
+
+  # Run ros2 launch in the foreground (interactive)
+  ros2 launch go2_control_cpp minimal_bt_launch_sim.py
+}
+
+sim() {
+  (
+    # Force Fast DDS for this subshell only
+    unset CYCLONEDDS_URI CYCLONEDDS_HOME CYCLONEDDS_CONFIG
+    export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+
+    # (optional) ensure Humble is sourced if your shell hasn't already
+    # source /opt/ros/humble/setup.bash
+
+    cd ~/Rescue/Isaac/go2_omniverse && ./run_sim.sh
+    
+  )
+}
+```
