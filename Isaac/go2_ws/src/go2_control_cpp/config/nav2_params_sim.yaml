@@ -1,6 +1,6 @@
 flatten_node:
   ros__parameters:
-    resolution: 0.1
+    resolution: 0.05
     max_width_m: 50.0
     max_height_m: 50.0
     cloud_topic: "/glim_rosnode/points"
@@ -149,40 +149,41 @@ controller_server:
   ros__parameters:
     use_sim_time: True
     controller_frequency: 20.0
-    min_x_velocity_threshold: 0.001
-    min_y_velocity_threshold: 0.01
-    min_theta_velocity_threshold: 0.001
+    
+    # 1. Update Thresholds
+    # Increase slightly to ignore sensor noise when stationary
+    min_x_velocity_threshold: 0.05
+    min_y_velocity_threshold: 0.05
+    min_theta_velocity_threshold: 0.05 
+    
     failure_tolerance: 1.0
     progress_checker_plugin: "progress_checker"
-    goal_checker_plugins: ["general_goal_checker"] # "precise_goal_checker"
+    goal_checker_plugins: ["general_goal_checker"] 
     controller_plugins: ["FollowPath"]
 
     # Progress checker parameters
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
-      required_movement_radius: 1.0
-      movement_time_allowance: 30.0
-    # Goal checker parameters
-    #precise_goal_checker:
-    #  plugin: "nav2_controller::SimpleGoalChecker"
-    #  xy_goal_tolerance: 0.25
-    #  yaw_goal_tolerance: 0.25
-    #  stateful: True
+      required_movement_radius: 0.3
+      movement_time_allowance: 5.0
+      
+    # 2. LOOSE Goal Checker (The Referee)
+    # We make this "Easy" to satisfy so the robot succeeds quickly.
     general_goal_checker:
       stateful: true
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.3
-      yaw_goal_tolerance: 0.3
+      xy_goal_tolerance: 0.1   # Wide tolerance
+      yaw_goal_tolerance: 0.25  # 15 degrees 
     # DWB parameters
     FollowPath:
       plugin: "dwb_core::DWBLocalPlanner"
       debug_trajectory_details: True
       min_vel_x: -0.8
-      min_vel_y: 0.0
+      min_vel_y: -0.8
       max_vel_x: 0.8
       max_vel_y: 0.8
       max_vel_theta: 1.3
-      min_speed_xy: 0.0
+      min_speed_xy: 0.3
       max_speed_xy: 1.2
       min_speed_theta: 0.0
       acc_lim_x: 1.2
@@ -198,21 +199,40 @@ controller_server:
       linear_granularity: 0.05
       angular_granularity: 0.025
       transform_tolerance: 10.0
-      xy_goal_tolerance: 0.2
-      trans_stopped_velocity: 0.1
-      short_circuit_trajectory_evaluation: false
-      stateful: True
-      critics: ["RotateToGoal", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist"]
-      BaseObstacle.scale: 0.1
-      PathAlign.scale: 32.0
-      PathAlign.forward_point_distance: 0.2
-      GoalAlign.scale: 24.0
-      GoalAlign.forward_point_distance: 0.2
+      xy_goal_tolerance: 0.15
+      trans_stopped_velocity: 0.01
+
+      # --- CRITICS TUNING ---
+      # Added "Oscillation" to the list
+      critics: ["RotateToGoal", "Oscillation", "ObstacleFootprint", "GoalAlign", "PathAlign", "PathDist"]
+      
+      ObstacleFootprint.scale: 0.02
+      ObstacleFootprint.sum_scores: false # false = if any point hits, it's lethal (safer)
+      
+      # PATH DISTANCE (Highest Priority: Stay on the line)
       PathDist.scale: 32.0
-      GoalDist.scale: 24.0
+      
+      # PATH ALIGN (High Priority: Follow the curve of the line)
+      PathAlign.scale: 20.0
+      PathAlign.forward_point_distance: 0.3 # INCREASED: Smoothes out jitter
+      
+      # GOAL ALIGN (Low Priority: Tie-breaker only)
+      # Reduced from 24.0 to 10.0. This stops it from ignoring the path.
+      GoalAlign.scale: 5.0
+      GoalAlign.forward_point_distance: 0.3
+      
+      # ROTATE TO GOAL (Only happens AT the goal)
       RotateToGoal.scale: 32.0
       RotateToGoal.slowing_factor: 1.0
       RotateToGoal.lookahead_time: -1.0
+      
+      # OSCILLATION (Prevents the wobble)
+      Oscillation.scale: 1.0
+      Oscillation.oscillation_reset_dist: 0.05
+      
+      trans_stopped_velocity: 0.1
+      short_circuit_trajectory_evaluation: false
+      stateful: True
 
 velocity_smoother:
   ros__parameters:
@@ -238,10 +258,11 @@ local_costmap:
       robot_base_frame: livox_frame
       use_sim_time: True
       rolling_window: true
-      width: 9
-      height: 9
+      width: 3
+      height: 3
       resolution: 0.1
-      robot_radius: 0.15
+      footprint: "[ [0.3, 0.15], [0.3, -0.15], [-0.3, -0.15], [-0.3, 0.15] ]"
+      footprint_padding: 0.02 # Added a small 2cm safety buffer
       plugins: ["inflation_layer", "static_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
@@ -265,7 +286,8 @@ global_costmap:
       inscribed_obstacle_cost_value: 10
       trinary_costmap: false
       use_sim_time: True
-      robot_radius: 0.3
+      footprint: "[ [0.3, 0.15], [0.3, -0.15], [-0.3, -0.15], [-0.3, 0.15] ]"
+      footprint_padding: 0.02 # Added a small 2cm safety buffer
       resolution: 0.1
       track_unknown_space: false
       plugins: ["static_layer", "inflation_layer"]
