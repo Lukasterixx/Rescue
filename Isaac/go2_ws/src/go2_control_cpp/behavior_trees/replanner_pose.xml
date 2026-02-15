@@ -3,37 +3,48 @@
   <BehaviorTree ID="MainTree">
     <RateController hz="5.0">
       <PipelineSequence name="NavigateWithReplanning">
-        <DistanceController distance="1.0" global_frame="map2d" robot_base_frame="livox_frame">
-          <!-- Use ~1 Hz so preemptions are handled promptly.
-               If you keep 0.1 Hz, preemption may wait up to 10s. -->
-          <RateController hz="1.0">
-            <!-- Replan if: Goal updated OR GlobalUpdatedGoal OR path invalid; else reuse path -->
-            <Fallback name="PlanIfNeeded">
-              <Sequence name="NeedNewPlan">
-                <!-- AnyNeedPlan: SUCCESS if ANY child is SUCCESS -->
-                <Fallback name="AnyNeedPlan">
-                  <GoalUpdated/>
-                  <GlobalUpdatedGoal/>
-                  <Inverter>
-                    <IsPathValid path="{path}" server_timeout="2s"/>
-                  </Inverter>
-                </Fallback>
-
-                <ComputePathToPose
-                  goal="{goal}"
-                  start=""
-                  planner_id="GridBased"
-                  server_name="compute_path_to_pose"
-                  server_timeout="5s"
-                  path="{path}"/>
-              </Sequence>
-
-              <!-- Reuse current path when still valid and goal unchanged -->
-              <IsPathValid path="{path}" server_timeout="2s"/>
+        
+        <Fallback name="PlannerSelector">
+          
+          <Sequence name="CheckPreemptions">
+            <Fallback name="NewGoalConditions">
+              <GoalUpdated/>
+              <GlobalUpdatedGoal/>
             </Fallback>
-          </RateController>
-        </DistanceController>
+            <ComputePathToPose
+              goal="{goal}"
+              start=""
+              planner_id="GridBased"
+              server_name="compute_path_to_pose"
+              server_timeout="5s"
+              path="{path}"/>
+          </Sequence>
 
+          <DistanceController distance="1.0" global_frame="map2d" robot_base_frame="livox_frame">
+            <RateController hz="1.0">
+              <Fallback name="PlanIfNeeded">
+                <Sequence name="NeedNewPlan">
+                  <Fallback name="AnyNeedPlan">
+                    <GoalUpdated/>
+                    <GlobalUpdatedGoal/> 
+                    <Inverter>
+                      <IsPathValid path="{path}" server_timeout="2s"/>
+                    </Inverter>
+                  </Fallback>
+                  <ComputePathToPose
+                    goal="{goal}"
+                    start=""
+                    planner_id="GridBased"
+                    server_name="compute_path_to_pose"
+                    server_timeout="5s"
+                    path="{path}"/>
+                </Sequence>
+                <IsPathValid path="{path}" server_timeout="2s"/>
+              </Fallback>
+            </RateController>
+          </DistanceController>
+
+        </Fallback>
         <FollowPath
           controller_id="FollowPath"
           path="{path}"
@@ -43,6 +54,4 @@
       </PipelineSequence>
     </RateController>
   </BehaviorTree>
-
-  <!-- Keep your TreeNodesModel exactly as you pasted (no changes needed). -->
 </root>

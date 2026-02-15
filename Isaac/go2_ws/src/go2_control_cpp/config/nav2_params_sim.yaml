@@ -152,9 +152,9 @@ controller_server:
     
     # 1. Update Thresholds
     # Increase slightly to ignore sensor noise when stationary
-    min_x_velocity_threshold: 0.05
-    min_y_velocity_threshold: 0.05
-    min_theta_velocity_threshold: 0.05 
+    min_x_velocity_threshold: 0.00
+    min_y_velocity_threshold: 0.00
+    min_theta_velocity_threshold: 0.00
     
     failure_tolerance: 1.0
     progress_checker_plugin: "progress_checker"
@@ -183,7 +183,7 @@ controller_server:
       max_vel_x: 0.8
       max_vel_y: 0.8
       max_vel_theta: 1.3
-      min_speed_xy: 0.3
+      min_speed_xy: 0.0
       max_speed_xy: 1.2
       min_speed_theta: 0.0
       acc_lim_x: 1.2
@@ -199,12 +199,12 @@ controller_server:
       linear_granularity: 0.05
       angular_granularity: 0.025
       transform_tolerance: 10.0
-      xy_goal_tolerance: 0.15
+      xy_goal_tolerance: 0.05
       trans_stopped_velocity: 0.01
 
       # --- CRITICS TUNING ---
       # Added "Oscillation" to the list
-      critics: ["RotateToGoal", "Oscillation", "ObstacleFootprint", "GoalAlign", "PathAlign", "PathDist"]
+      critics: ["RotateToGoal", "ObstacleFootprint", "GoalAlign", "PathAlign", "PathDist"]
       
       ObstacleFootprint.scale: 0.02
       ObstacleFootprint.sum_scores: false # false = if any point hits, it's lethal (safer)
