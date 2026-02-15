@@ -72,7 +72,6 @@ from omnigraph import create_front_cam_omnigraph
 # USD helpers (for moving the warehouse visually)
 import omni.usd
 from pxr import UsdGeom, Gf, Tf
-from maze_manager import MazeManager
 
 
 # ===================== Warehouse Visual Offset (purely visual) =====================
@@ -548,26 +547,6 @@ def run_sim():
     camera_lst = add_camera(env_cfg.scene.num_envs, args_cli.robot)
     setup_custom_env()
 
-    # --- MAZE INIT ---
-    maze_manager = None
-    last_maze_update_pos = None
-
-    if args_cli.custom_env == "maze":
-        stage = omni.usd.get_context().get_stage()
-        # Create maze manager
-        maze_manager = MazeManager(stage, start_pos=(0,0,0), grid_radius=12)
-        
-        # --- NEW: Initial Full Generation ---
-        # We try to get the robot position immediately. If not available, we assume (0,0,0).
-        init_pos = _get_robot_world_pos()
-        if init_pos is None: 
-            init_pos = Gf.Vec3d(0,0,0)
-        
-        print("[Maze] Forcing initial full generation...")
-        maze_manager.update(init_pos, force_complete=True)
-        last_maze_update_pos = init_pos
-    # -----------------
-
     stage = omni.usd.get_context().get_stage()
     for path in ("/World/warehouse/Landscape", "/World/groundPlane", "/World/defaultGroundPlane"):
         prim = stage.GetPrimAtPath(path)
@@ -596,26 +575,6 @@ def run_sim():
     next_deadline = time.monotonic() + 0.1
     
     while simulation_app.is_running():
-        # --- OPTIMIZED MAZE UPDATE ---
-        if maze_manager is not None:
-            rob_pos = _get_robot_world_pos() 
-            if rob_pos:
-                should_update = False
-                
-                # Check distance (throttle to 0.5m)
-                if last_maze_update_pos is None:
-                    should_update = True
-                else:
-                    dist = (rob_pos - last_maze_update_pos).GetLength()
-                    # Updated to exactly 0.5m as requested
-                    if dist >= 0.5: 
-                        should_update = True
-                
-                if should_update:
-                    # Normal update (incremental growing if needed, though initial forced it full)
-                    maze_manager.update(rob_pos, force_complete=False)
-                    last_maze_update_pos = rob_pos
-        # -----------------------------
 
         with torch.inference_mode():
             actions = policy(obs)

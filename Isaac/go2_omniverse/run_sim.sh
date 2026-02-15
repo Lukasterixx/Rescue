@@ -52,4 +52,4 @@ export CARB_APP_PATH=$ISAAC_PATH/kit
 export ORBIT_PATH=/home/lukas/IsaacLab
 
 # Run the Python script
-python main.py --robot_amount 1 --robot go2 --terrain flat --custom_env maze
+python main.py --robot_amount 1 --robot go2 --terrain rough --custom_env maze
