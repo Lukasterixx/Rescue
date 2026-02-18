@@ -206,14 +206,14 @@ controller_server:
       # Added "Oscillation" to the list
       critics: ["RotateToGoal", "ObstacleFootprint", "GoalAlign", "PathAlign", "PathDist"]
       
-      ObstacleFootprint.scale: 0.02
-      ObstacleFootprint.sum_scores: false # false = if any point hits, it's lethal (safer)
+      ObstacleFootprint.scale: 0.01
+      ObstacleFootprint.sum_scores: true # false = if any point hits, it's lethal (safer)
       
       # PATH DISTANCE (Highest Priority: Stay on the line)
       PathDist.scale: 32.0
       
       # PATH ALIGN (High Priority: Follow the curve of the line)
-      PathAlign.scale: 20.0
+      PathAlign.scale: 25.0
       PathAlign.forward_point_distance: 0.3 # INCREASED: Smoothes out jitter
       
       # GOAL ALIGN (Low Priority: Tie-breaker only)

@@ -1,7 +1,7 @@
 services:
   p2dingo:
-    image: p2test:latest
-    container_name: p2test
+    image: rescue:latest
+    container_name: rescue
     network_mode: host
     ipc: host
     privileged: true
@@ -26,14 +26,10 @@ services:
       - /home/unitree/.go2_token:/root/.go2_token:ro
       
       # Allows you to edit code on the laptop, and entrypoint will quick-compile JUST this pkg
-      - /home/unitree/P2Dingo/Isaac/go2_ws/src/go2_control_cpp:/root/ws/src/go2_control_cpp
+      - /home/unitree/Rescue/Isaac/go2_ws/src/go2_control_cpp:/root/ws/src/go2_control_cpp
 
       # --- OPTIONAL: Debugging ---
-      - p2dingo-glim-dump:/tmp/dump
-      
-      # --- REMOVED VOLUMES ---
-      # We removed p2dingo-build, p2dingo-install, p2dingo-gtsam, etc.
-      # This ensures the container uses the compiled binaries BAKED INTO the image.
+      - rescue-glim-dump:/tmp/dump
 
     command: ["/usr/local/bin/run_with_livox.sh"]
     labels:
@@ -55,5 +51,5 @@ services:
     restart: unless-stopped
 
 volumes:
-  p2dingo-glim-dump: {}
+  resuce-glim-dump: {}
   

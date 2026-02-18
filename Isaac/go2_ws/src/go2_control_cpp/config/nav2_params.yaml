@@ -1,44 +1,45 @@
 flatten_node:
   ros__parameters:
-    resolution: 0.1
-    max_width_m: 200.0
-    max_height_m: 200.0
+    resolution: 0.05
+    max_width_m: 50.0
+    max_height_m: 50.0
     cloud_topic: "/glim_rosnode/points"
     map2d_topic: "/map2d"
     queue_size: 10
-    update_radius_m: 8.0
+    update_radius_m: 3.0
     tick_rate_hz: 3.0
-    max_occ: 30
-    min_height_rel: 0.4
-    max_height_rel: 4.0
-    min_height_close: -0.1
+    max_occ: 100
+    min_height_rel: 0.0
+    max_height_rel: 3.0
+    full_map_publish_every_n_ticks: 2
     close_distance: 2.0
+    min_height_close: 0.05
+    voxel_res_multiplier: 1.0
 
 walk_bt_node:
   ros__parameters:
     free_thresh:     0.25
-    occupied_thresh: 0.30
+    occupied_thresh: 0.65
     maps_dir:        "maps"
     panels_face_left: false
 
-    table_height: 1.5
+    table_height: 1.0
     table_tilt: 17.0
     unit_height: 2276.0
     unit_width: 1134.0
     unit_sep: 70.0
 
-    # Frontier explorer
     radius_m: 30.0
     min_rect_area: 60
     aspect_ratio: 1.5
     occ_thresh: 65
     backoff_from_frontier_m: 0.6
-    corridor_margin_m: 0.0
+    corridor_margin_m: 0.5
     ray_step_deg: 3.0
-    panel_length_m: 15.0
+    panel_length_m: 68.0
     inflation_block_at_cost: 1
     los_thickness_m: 0.1
-    band_m: 6.0
+    band_m: 7.0
     fov_half_deg: 120.0
     min_envelope_frontier_dist_m: 7.5
     center_use_quadrature: true
@@ -47,7 +48,7 @@ walk_bt_node:
 
 bt_go2:
   ros__parameters:
-    use_sim_time:      false
+    use_sim_time:      True
     global_frame:      odom
     robot_base_frame:  livox_frame
     odom_topic:        /odom
@@ -125,60 +126,72 @@ bt_go2:
       - nav2_drive_on_heading_cancel_bt_node
       - nav2_is_battery_charging_condition_bt_node
 
+
+bt_navigator:
+  ros__parameters:
+    use_sim_time: false
+    global_frame: odom
+    robot_base_frame: livox_frame
+
 bt_navigator_navigate_through_poses_rclcpp_node:
   ros__parameters:
     use_sim_time: false
+    global_frame: odom
+    robot_base_frame: livox_frame
 
 bt_navigator_navigate_to_pose_rclcpp_node:
   ros__parameters:
     use_sim_time: false
+    global_frame: odom
+    robot_base_frame: livox_frame
 
 controller_server:
   ros__parameters:
     use_sim_time: false
     controller_frequency: 20.0
-    min_x_velocity_threshold: 0.001
-    min_y_velocity_threshold: 0.01
-    min_theta_velocity_threshold: 0.001
+    
+    # 1. Update Thresholds
+    # Increase slightly to ignore sensor noise when stationary
+    min_x_velocity_threshold: 0.00
+    min_y_velocity_threshold: 0.00
+    min_theta_velocity_threshold: 0.00
+    
     failure_tolerance: 1.0
     progress_checker_plugin: "progress_checker"
-    goal_checker_plugins: ["general_goal_checker"] # "precise_goal_checker"
+    goal_checker_plugins: ["general_goal_checker"] 
     controller_plugins: ["FollowPath"]
 
     # Progress checker parameters
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
-      required_movement_radius: 1.0
-      movement_time_allowance: 30.0
-    # Goal checker parameters
-    #precise_goal_checker:
-    #  plugin: "nav2_controller::SimpleGoalChecker"
-    #  xy_goal_tolerance: 0.25
-    #  yaw_goal_tolerance: 0.25
-    #  stateful: True
+      required_movement_radius: 0.3
+      movement_time_allowance: 5.0
+      
+    # 2. LOOSE Goal Checker (The Referee)
+    # We make this "Easy" to satisfy so the robot succeeds quickly.
     general_goal_checker:
-      stateful: True
+      stateful: true
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.3
-      yaw_goal_tolerance: 0.3
+      xy_goal_tolerance: 0.1   # Wide tolerance
+      yaw_goal_tolerance: 0.25  # 15 degrees 
     # DWB parameters
     FollowPath:
       plugin: "dwb_core::DWBLocalPlanner"
       debug_trajectory_details: True
-      min_vel_x: 0.3
-      min_vel_y: 0.0
+      min_vel_x: -0.8
+      min_vel_y: -0.8
       max_vel_x: 0.8
       max_vel_y: 0.8
-      max_vel_theta: 0.6
+      max_vel_theta: 1.3
       min_speed_xy: 0.0
-      max_speed_xy: 1.0
+      max_speed_xy: 1.2
       min_speed_theta: 0.0
-      acc_lim_x: 0.5
-      acc_lim_y: 0.5
-      acc_lim_theta: 0.8
-      decel_lim_x: -0.5
-      decel_lim_y: -0.5
-      decel_lim_theta: -0.8
+      acc_lim_x: 1.2
+      acc_lim_y: 1.2
+      acc_lim_theta: 1.0
+      decel_lim_x: -1.0
+      decel_lim_y: -1.0
+      decel_lim_theta: -1.0
       vx_samples: 20
       vy_samples: 10
       vtheta_samples: 15
@@ -186,21 +199,40 @@ controller_server:
       linear_granularity: 0.05
       angular_granularity: 0.025
       transform_tolerance: 10.0
-      xy_goal_tolerance: 0.3
-      trans_stopped_velocity: 0.25
-      short_circuit_trajectory_evaluation: True
-      stateful: True
-      critics: ["RotateToGoal", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist"]
-      BaseObstacle.scale: 0.02
-      PathAlign.scale: 32.0
-      PathAlign.forward_point_distance: 0.7
-      GoalAlign.scale: 24.0
-      GoalAlign.forward_point_distance: 0.5
+      xy_goal_tolerance: 0.05
+      trans_stopped_velocity: 0.01
+
+      # --- CRITICS TUNING ---
+      # Added "Oscillation" to the list
+      critics: ["RotateToGoal", "ObstacleFootprint", "GoalAlign", "PathAlign", "PathDist"]
+      
+      ObstacleFootprint.scale: 0.01
+      ObstacleFootprint.sum_scores: true # false = if any point hits, it's lethal (safer)
+      
+      # PATH DISTANCE (Highest Priority: Stay on the line)
       PathDist.scale: 32.0
-      GoalDist.scale: 24.0
+      
+      # PATH ALIGN (High Priority: Follow the curve of the line)
+      PathAlign.scale: 25.0
+      PathAlign.forward_point_distance: 0.3 # INCREASED: Smoothes out jitter
+      
+      # GOAL ALIGN (Low Priority: Tie-breaker only)
+      # Reduced from 24.0 to 10.0. This stops it from ignoring the path.
+      GoalAlign.scale: 5.0
+      GoalAlign.forward_point_distance: 0.3
+      
+      # ROTATE TO GOAL (Only happens AT the goal)
       RotateToGoal.scale: 32.0
-      RotateToGoal.slowing_factor: 5.0
+      RotateToGoal.slowing_factor: 1.0
       RotateToGoal.lookahead_time: -1.0
+      
+      # OSCILLATION (Prevents the wobble)
+      Oscillation.scale: 1.0
+      Oscillation.oscillation_reset_dist: 0.05
+      
+      trans_stopped_velocity: 0.1
+      short_circuit_trajectory_evaluation: false
+      stateful: True
 
 velocity_smoother:
   ros__parameters:
@@ -208,10 +240,10 @@ velocity_smoother:
     smoothing_frequency: 20.0
     scale_velocities: False
     feedback: "OPEN_LOOP"
-    max_velocity: [0.8, 0.8, 0.5]
-    min_velocity: [-0.8, -0.8, -0.5]
-    max_accel: [0.6, 0.6, 0.6]
-    max_decel: [-0.6, 0.6, -0.6]
+    max_velocity: [1.2, 1.2, 1.0]
+    min_velocity: [-1.2, -1.0, -1.0]
+    max_accel: [1.3, 1.3, 1.3]
+    max_decel: [-1.0, -1.0, -1.0]
     odom_topic: "odom"
     odom_duration: 0.1
     deadband_velocity: [0.0, 0.0, 0.0]
@@ -220,41 +252,22 @@ velocity_smoother:
 local_costmap:
   local_costmap:
     ros__parameters:
-      update_frequency: 3.0
+      update_frequency: 1.0
       publish_frequency: 1.0
       global_frame: odom
       robot_base_frame: livox_frame
       use_sim_time: false
       rolling_window: true
-      width: 9
-      height: 9
+      width: 3
+      height: 3
       resolution: 0.1
-      robot_radius: 0.3
-      plugins: ["voxel_layer", "inflation_layer", "static_layer"]
+      footprint: "[ [0.3, 0.15], [0.3, -0.15], [-0.3, -0.15], [-0.3, 0.15] ]"
+      footprint_padding: 0.02 # Added a small 2cm safety buffer
+      plugins: ["inflation_layer", "static_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 5.0
-        inflation_radius: 0.2
-      voxel_layer:
-        plugin: "nav2_costmap_2d::VoxelLayer"
-        enabled: false
-        publish_voxel_map: True
-        origin_z: 0.0
-        z_resolution: 0.05
-        z_voxels: 16
-        max_obstacle_height: 2.0
-        mark_threshold: 0
-        observation_sources: pointcloud
-        pointcloud:
-          topic: /glim_rosnode/points
-          data_type: "PointCloud2"
-          marking: true              # use the cloud to mark obstacles
-          clearing: true             # use it to clear freespace
-          max_obstacle_height: 2.0   # discard points above this (meters)
-          raytrace_max_range: 5.0     # how far to raytrace for freespace clearing
-          raytrace_min_range: 0.0
-          obstacle_max_range: 5.0    # ignore points beyond this when marking
-          obstacle_min_range: 0.0
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.1
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_topic: "/map2d"
@@ -270,10 +283,13 @@ global_costmap:
       publish_frequency: 1.0
       global_frame: odom
       robot_base_frame: livox_frame
+      inscribed_obstacle_cost_value: 10
+      trinary_costmap: false
       use_sim_time: false
-      robot_radius: 0.3
+      footprint: "[ [0.3, 0.15], [0.3, -0.15], [-0.3, -0.15], [-0.3, 0.15] ]"
+      footprint_padding: 0.02 # Added a small 2cm safety buffer
       resolution: 0.1
-      track_unknown_space: true
+      track_unknown_space: false
       plugins: ["static_layer", "inflation_layer"]
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
@@ -283,8 +299,8 @@ global_costmap:
         track_unknown_space: false
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 5.0
-        inflation_radius: 0.5
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.4
       always_send_full_costmap: True
 
 map_saver:
@@ -301,7 +317,7 @@ planner_server:
     
     GridBased:
       plugin: "nav2_smac_planner/SmacPlanner2D" # <--- CHANGED: Hybrid -> 2D
-      tolerance: 0.2                     # slightly looser tolerance helps in tight rows
+      tolerance: 0.5                     # slightly looser tolerance helps in tight rows
       downsample_costmap: false          
       downsampling_factor: 1             
       allow_unknown: true                
@@ -312,8 +328,8 @@ planner_server:
       use_final_approach_orientation: true # Essential for aligning with your waypoints
       smoother:
         max_iterations: 1000
-        w_smooth: 0.7
-        w_data: 0.1
+        w_smooth: 0.3
+        w_data: 0.5
         tolerance: 1.0e-4
         do_refinement: true
         refinement_num: 2
@@ -363,6 +379,7 @@ robot_state_publisher:
 
 waypoint_follower:
   ros__parameters:
+    global_frame_id: odom
     use_sim_time: false
     loop_rate: 20
     stop_on_failure: true
