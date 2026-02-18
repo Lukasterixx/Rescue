@@ -48,7 +48,6 @@ if [ -d "$P2_PKG_DIR" ]; then
 
 else
   echo "[container] ERROR: P2RemoteConnection dir not found: $P2_PKG_DIR"
-  exit 1
 fi
 
 # --- KEEP ALIVE ---
