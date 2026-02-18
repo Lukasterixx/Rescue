@@ -6,7 +6,7 @@ set -eo pipefail
 # The SIYI Camera default network is 192.168.144.x
 # We add an alias IP to eth0 so we can talk to both.
 
-INTERFACE="enp0s31f6"
+INTERFACE="enP8p1s0"
 TARGET_IP="192.168.144.100/24"
 
 # Check if we have privileges to modify networking
