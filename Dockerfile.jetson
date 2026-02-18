@@ -163,7 +163,6 @@ WORKDIR $WS/src
 
 # Clone sources
 RUN git clone --depth 1 https://github.com/unitreerobotics/unitree_ros2.git
-RUN git clone https://github.com/vick-l1m/P2RemoteConnection.git $WS/src/P2RemoteConnection
 RUN git clone https://github.com/koide3/glim.git ${WS}/src/glim
 RUN git clone https://github.com/koide3/glim_ros2.git ${WS}/src/glim_ros2
 # Clone vision_opencv to fix version conflict
@@ -172,10 +171,6 @@ RUN git clone -b humble https://github.com/ros-perception/vision_opencv.git $WS/
 # Copy Local Packages & Configs
 COPY Isaac/go2_ws/src/go2_control_cpp $WS/src/go2_control_cpp
 COPY cyclonedds_go2.xml /root/cyclonedds_go2.xml
-
-# Install Python Requirements for P2Remote
-RUN pip3 install fastapi uvicorn && \
-    pip3 install -r $WS/src/P2RemoteConnection/src/p2_remote_connection/requirements.txt || echo "Warning: requirements.txt failed"
 
 # Livox ROS Driver Setup
 WORKDIR $LIVOX_WS/src

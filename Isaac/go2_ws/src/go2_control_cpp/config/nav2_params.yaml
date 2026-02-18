@@ -10,7 +10,7 @@ flatten_node:
     tick_rate_hz: 3.0
     max_occ: 100
     min_height_rel: 0.0
-    max_height_rel: 3.0
+    max_height_rel: 1.0
     full_map_publish_every_n_ticks: 2
     close_distance: 2.0
     min_height_close: 0.05
