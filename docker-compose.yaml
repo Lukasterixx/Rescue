@@ -51,5 +51,5 @@ services:
     restart: unless-stopped
 
 volumes:
-  resuce-glim-dump: {}
+  rescue-glim-dump: {}
   
