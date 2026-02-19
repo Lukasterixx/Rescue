@@ -164,15 +164,15 @@ controller_server:
     # Progress checker parameters
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
-      required_movement_radius: 0.3
-      movement_time_allowance: 5.0
+      required_movement_radius: 0.1
+      movement_time_allowance: 10.0
       
     # 2. LOOSE Goal Checker (The Referee)
     # We make this "Easy" to satisfy so the robot succeeds quickly.
     general_goal_checker:
       stateful: true
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.1   # Wide tolerance
+      xy_goal_tolerance: 0.2   # Wide tolerance
       yaw_goal_tolerance: 0.25  # 15 degrees 
     # DWB parameters
     FollowPath:
@@ -204,13 +204,13 @@ controller_server:
 
       # --- CRITICS TUNING ---
       # Added "Oscillation" to the list
-      critics: ["RotateToGoal", "ObstacleFootprint", "GoalAlign", "PathAlign", "PathDist"]
-      
+      critics: ["RotateToGoal", "ObstacleFootprint", "PathAlign", "PathDist", "GoalDist", "GoalAlign"]      
+
       ObstacleFootprint.scale: 0.01
       ObstacleFootprint.sum_scores: true # false = if any point hits, it's lethal (safer)
       
       # PATH DISTANCE (Highest Priority: Stay on the line)
-      PathDist.scale: 32.0
+      PathDist.scale: 46.0
       
       # PATH ALIGN (High Priority: Follow the curve of the line)
       PathAlign.scale: 25.0
@@ -218,12 +218,14 @@ controller_server:
       
       # GOAL ALIGN (Low Priority: Tie-breaker only)
       # Reduced from 24.0 to 10.0. This stops it from ignoring the path.
-      GoalAlign.scale: 5.0
+      GoalAlign.scale: 24.0
       GoalAlign.forward_point_distance: 0.3
+
+      GoalDist.scale: 24.0
       
       # ROTATE TO GOAL (Only happens AT the goal)
       RotateToGoal.scale: 32.0
-      RotateToGoal.slowing_factor: 1.0
+      RotateToGoal.slowing_factor: 2.0
       RotateToGoal.lookahead_time: -1.0
       
       # OSCILLATION (Prevents the wobble)
