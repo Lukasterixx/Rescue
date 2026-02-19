@@ -2,19 +2,42 @@
 set -e
 
 # Note: ROS and Workspace sourcing is now handled by entrypoint.sh automatically.
-# We can skip straight to launching nodes.
 
 # --- START LIVOX ---
 echo "[container] Starting Livox driver in background…"
-# The environment is already set up, so we just launch.
+
+# NOTE: Using 'mid360_driver_only.launch.py' is better for the robot than 'rviz_...'
+# because Rviz consumes huge CPU/GPU resources. Change this line only if you
+# strictly need Rviz inside the container.
 ros2 launch livox_ros_driver2 mid360_driver_only.launch.py &
-LIVOX_PID=$!
+LAUNCH_PID=$!
+
+# --- APPLY REAL-TIME PRIORITY FIX ---
+echo "[container] Waiting for Livox Node to spawn..."
+sleep 5  # Wait for ROS 2 to bring up the C++ node
+
+# Find the PID of the actual driver binary (not the python launch script)
+# We search for "livox_ros_driver2_node" which is the compiled C++ executable
+DRIVER_PID=$(pgrep -f "livox_ros_driver2_node" | head -n 1)
+
+if [ -n "$DRIVER_PID" ]; then
+    echo "[container] Found Driver PID: $DRIVER_PID. Applying Real-Time Priority..."
+    
+    # Try to set FIFO scheduling with priority 90
+    if chrt -f -p 90 "$DRIVER_PID"; then
+        echo "[container] ✅ SUCCESS: Real-Time Priority set to 90."
+    else
+        echo "[container] ❌ FAILED: Could not set priority."
+        echo "    -> Ensure you run docker with '--privileged' or '--cap-add=SYS_NICE'"
+    fi
+else
+    echo "[container] ⚠️ WARNING: Could not find 'livox_ros_driver2_node'. Priority not applied."
+fi
 
 # --- START REMOTE CONNECTION ---
 echo "[container] Starting P2RemoteConnection..."
 
 # A) Setup Token
-# Ensure you bind mount this file at runtime (e.g., -v ~/.go2_token:/root/.go2_token)
 if [ -f "/root/.go2_token" ]; then
   export GO2_API_TOKEN="$(cat /root/.go2_token)"
   echo "[container] Loaded GO2_API_TOKEN"
@@ -24,7 +47,6 @@ else
 fi
 
 # B) Navigate to Python App
-# Path matches the Dockerfile: $WS/src/P2RemoteConnection/...
 P2_PKG_DIR="/root/ws/src/P2RemoteConnection/src/p2_remote_connection"
 
 if [ -d "$P2_PKG_DIR" ]; then
@@ -41,19 +63,13 @@ if [ -d "$P2_PKG_DIR" ]; then
   UI_PID=$!
 
   popd >/dev/null
-
-  # Optional: Uncomment if you want the bridge node to start automatically
-  # ros2 run p2_remote_connection web_teleop_bridge &
-  BRIDGE_PID=""
-
 else
   echo "[container] ERROR: P2RemoteConnection dir not found: $P2_PKG_DIR"
 fi
 
 # --- KEEP ALIVE ---
 echo "[container] System running."
-echo "  - Livox PID: $LIVOX_PID"
-echo "  - API PID:   $API_PID"
-echo "  - UI PID:    $UI_PID"
+echo "  - Launch PID: $LAUNCH_PID"
+echo "  - Driver PID: $DRIVER_PID"
 
 wait
