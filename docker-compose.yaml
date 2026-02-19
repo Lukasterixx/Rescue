@@ -49,7 +49,7 @@ services:
       - WATCHTOWER_ROLLING_RESTART=true
       - TZ=Australia/Sydney
       - WATCHTOWER_SCHEDULE=0 */30 * * * *
-    restart: unless-stopped
+    restart: no
 
 volumes:
   rescue-glim-dump: {}

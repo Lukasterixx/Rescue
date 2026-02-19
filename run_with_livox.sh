@@ -2,6 +2,26 @@
 set -e
 
 # Note: ROS and Workspace sourcing is now handled by entrypoint.sh automatically.
+# 1. Force the Linux Kernel to allow massive 2GB UDP receive AND send buffers
+# (This requires the container to be run with --privileged)
+if sysctl -w net.core.rmem_max=2147483647; then
+    echo "[container] ✅ Kernel rmem_max set to 2GB."
+else
+    echo "[container] ⚠️ WARNING: Failed to set rmem_max. Are you running --privileged?"
+fi
+
+if sysctl -w net.core.rmem_default=2147483647; then
+    echo "[container] ✅ Kernel rmem_default set to 2GB."
+fi
+
+# ADD THESE TWO LINES for the send buffers:
+if sysctl -w net.core.wmem_max=2147483647; then
+    echo "[container] ✅ Kernel wmem_max set to 2GB."
+fi
+
+if sysctl -w net.core.wmem_default=2147483647; then
+    echo "[container] ✅ Kernel wmem_default set to 2GB."
+fi
 
 # --- START LIVOX ---
 echo "[container] Starting Livox driver in background…"
