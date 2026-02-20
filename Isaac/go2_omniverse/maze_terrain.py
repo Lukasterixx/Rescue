@@ -76,9 +76,16 @@ def generate_maze_terrain(difficulty: float, cfg: MazeTerrainCfg) -> tuple[list[
             
             # Elevation Chance
             if random.random() < 0.15:
-                steps_up = random.randint(2, 4) 
-                elevation_gain = steps_up * cfg.step_height
-                new_z = parent_z + elevation_gain
+                steps_changed = random.randint(2, 4) 
+                elevation_change = steps_changed * cfg.step_height
+                
+                # 50% chance to go down, 50% chance to go up
+                if random.random() < 0.5:
+                    # Decrease height and clamp to floor (0.0)
+                    new_z = max(0.0, parent_z - elevation_change)
+                else:
+                    # Increase height
+                    new_z = parent_z + elevation_change
             
             open_cells[(cr, cc)] = new_z
             passages.add(tuple(sorted(((cr, cc), parent))))

@@ -91,7 +91,7 @@ class MySceneCfg(InteractiveSceneCfg):
         offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
         attach_yaw_only=True,
         pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.6, 1.0]),
-        debug_vis=True,
+        debug_vis=False,
         drift_range=(0.0, 0.0),
         mesh_prim_paths=["/World/warehouse/ground"], 
         max_distance=100.0,
