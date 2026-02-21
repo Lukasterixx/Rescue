@@ -5,25 +5,12 @@
 #include <behaviortree_cpp_v3/bt_factory.h>
 #include <behaviortree_cpp_v3/decorators/delay_node.h>
 
-#include "go2_control_cpp/permission_node.hpp"
-#include "go2_control_cpp/walk_forward_action.hpp"
-#include "go2_control_cpp/slam_launch_node.hpp"
-#include "go2_control_cpp/flatten_pointcloud_to_map2d_node.hpp"
 #include "go2_control_cpp/map2d_saver_node.hpp"
-#include "go2_control_cpp/initial_pose.hpp"
-#include "go2_control_cpp/path_planner.hpp"
 #include "go2_control_cpp/nav2_ready.hpp"
 #include "go2_control_cpp/run_once.hpp"
-#include "go2_control_cpp/lateral_collision_node.hpp"
-#include "go2_control_cpp/camera_controller.hpp"
 
-#include "go2_control_cpp/initial_alignment.hpp"
-#include "go2_control_cpp/global_map2d_server.hpp"
-#include "go2_control_cpp/data_server.hpp"
-#include "go2_control_cpp/frontier_explorer.hpp"
+#include "go2_control_cpp/topological_mapper.hpp"
 #include "go2_control_cpp/distance_controller.hpp"
-#include "go2_control_cpp/battery_check.hpp"
-#include "go2_control_cpp/return_to_base.hpp"
 
 
 
@@ -41,36 +28,7 @@ WalkBTNode::WalkBTNode()
 void WalkBTNode::init(SharedPtr self)
 {
   // 1) Register your custom BehaviorTree node builders
-  factory_.registerBuilder<PermissionNode>(
-    "Permission",
-    [](const std::string & name, const BT::NodeConfiguration & config) {
-      return std::make_unique<PermissionNode>(name, config);
-    });
-  factory_.registerBuilder<WalkForwardAction>(
-    "WalkForward",
-    [](const std::string & name, const BT::NodeConfiguration & config) {
-      return std::make_unique<WalkForwardAction>(name, config);
-    });
-  factory_.registerBuilder<SLAMLaunchNode>(
-    "SLAMLaunch",
-    [](const std::string & name, const BT::NodeConfiguration & config) {
-      return std::make_unique<SLAMLaunchNode>(name, config);
-    });
-  factory_.registerBuilder<FlattenPointCloudToMap2D>(
-    "FlattenPointCloudToMap2D",
-    [](const std::string & name, const BT::NodeConfiguration & config) {
-      return std::make_unique<FlattenPointCloudToMap2D>(name, config);
-    });
-  factory_.registerBuilder<InitialPose>(
-    "InitialPose",
-    [](const std::string & name, const BT::NodeConfiguration & config) {
-      return std::make_unique<InitialPose>(name, config);
-    });
-  factory_.registerBuilder<PathPlanner>(
-    "PathPlanner",
-    [](const std::string & name, const BT::NodeConfiguration & config) {
-      return std::make_unique<PathPlanner>(name, config);
-    });
+  
   factory_.registerBuilder<Nav2Ready>(
     "Nav2Ready",
     [](const std::string & name, const BT::NodeConfiguration & config) {
@@ -86,21 +44,6 @@ void WalkBTNode::init(SharedPtr self)
     [](const std::string & name, const BT::NodeConfiguration & config) {
       return std::make_unique<DistanceTickController>(name, config);
     });
-  factory_.registerBuilder<InitialAlignment>(
-    "InitialAlignment",
-    [](const std::string & name, const BT::NodeConfiguration & config) {
-      return std::make_unique<InitialAlignment>(name, config);
-    });
-  factory_.registerBuilder<LocalizeSubmap>(
-    "LocalizeSubmap",
-    [](const std::string & name, const BT::NodeConfiguration & config) {
-      return std::make_unique<LocalizeSubmap>(name, config);
-    });
-  factory_.registerBuilder<LateralCollisionNode>(
-    "LateralCollisionNode",
-    [](const std::string & name, const BT::NodeConfiguration & config) {
-      return std::make_unique<LateralCollisionNode>(name, config);
-    });
 
   // register our Map2DSaver so the BT factory can create it
   this->declare_parameter<std::string>("maps_dir", "maps");
@@ -112,33 +55,11 @@ void WalkBTNode::init(SharedPtr self)
       return std::make_unique<Map2DSaver>(name, config);
     });
 
-  factory_.registerBuilder<DataServer>(
-    "DataServer",
+  factory_.registerBuilder<TopologicalMapperAction>(
+    "TopologicalMapperAction",
     [](const std::string & name, const BT::NodeConfiguration & config) {
-      return std::make_unique<DataServer>(name, config);
+      return std::make_unique<TopologicalMapperAction>(name, config);
     });
-  factory_.registerBuilder<FrontierExplore>(
-    "FrontierExplore",
-    [](const std::string & name, const BT::NodeConfiguration & config) {
-      return std::make_unique<FrontierExplore>(name, config);
-    });
-  factory_.registerBuilder<BatteryCheckAction>(
-    "BatteryCheckAction",
-    [](const std::string & name, const BT::NodeConfiguration & config) {
-      return std::make_unique<BatteryCheckAction>(name, config);
-    });
-  factory_.registerBuilder<ReturnToBaseAction>(
-    "ReturnToBaseAction",
-    [](auto & name, auto & config) {
-      return std::make_unique<ReturnToBaseAction>(name, config);
-    });
-  factory_.registerBuilder<CameraController>(
-    "CameraController",
-    [](const std::string & name, const BT::NodeConfiguration & config) {
-      return std::make_unique<go2_control_cpp::CameraController>(name, config);
-    }
-  );
-
 
   // 2) Create a Blackboard, inject our ROS Node handle, then load the XML
   auto blackboard = BT::Blackboard::create();

@@ -6,21 +6,9 @@ Panels:
       Expanded:
         - /Global Options1
         - /Status1
-        - /PointCloud21
-        - /Map1
-        - /PoseArray1
-        - /Image1
-        - /Map2
-        - /PointCloud22
-        - /PointCloud23
         - /MarkerArray1
-        - /MarkerArray2
-        - /Map3
-        - /TF1
-        - /Pose3
-        - /Map4
       Splitter Ratio: 0.5
-    Tree Height: 276
+    Tree Height: 396
   - Class: rviz_common/Selection
     Name: Selection
   - Class: rviz_common/Tool Properties
@@ -72,9 +60,9 @@ Visualization Manager:
       Enabled: false
       Invert Rainbow: false
       Max Color: 255; 255; 255
-      Max Intensity: 0.29751095175743103
+      Max Intensity: 0.3168453276157379
       Min Color: 0; 0; 0
-      Min Intensity: 0.004996706731617451
+      Min Intensity: 0.005317286122590303
       Name: PointCloud2
       Position Transformer: XYZ
       Selectable: false
@@ -208,27 +196,6 @@ Visualization Manager:
         Value: /global_costmap/costmap_updates
       Use Timestamp: false
       Value: false
-    - Alpha: 1
-      Arrow Length: 1.5
-      Axes Length: 0.30000001192092896
-      Axes Radius: 0.009999999776482582
-      Class: rviz_default_plugins/PoseArray
-      Color: 255; 25; 0
-      Enabled: true
-      Head Length: 0.07000000029802322
-      Head Radius: 0.029999999329447746
-      Name: PoseArray
-      Shaft Length: 0.23000000417232513
-      Shaft Radius: 0.009999999776482582
-      Shape: Arrow (Flat)
-      Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        Filter size: 10
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Value: /waypoints_farm
-      Value: true
     - Class: rviz_default_plugins/Image
       Enabled: true
       Max Value: 1
@@ -271,95 +238,6 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /plan
       Value: true
-    - Alpha: 0.20000000298023224
-      Class: rviz_default_plugins/Map
-      Color Scheme: costmap
-      Draw Behind: false
-      Enabled: true
-      Name: Map
-      Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        Filter size: 10
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Value: /map2dglobal
-      Update Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Value: /map2dglobal_updates
-      Use Timestamp: false
-      Value: true
-    - Alpha: 1
-      Autocompute Intensity Bounds: true
-      Autocompute Value Bounds:
-        Max Value: 10
-        Min Value: -10
-        Value: true
-      Axis: Z
-      Channel Name: intensity
-      Class: rviz_default_plugins/PointCloud2
-      Color: 192; 28; 40
-      Color Transformer: FlatColor
-      Decay Time: 0
-      Enabled: true
-      Invert Rainbow: false
-      Max Color: 255; 255; 255
-      Max Intensity: 4096
-      Min Color: 0; 0; 0
-      Min Intensity: 0
-      Name: PointCloud2
-      Position Transformer: XYZ
-      Selectable: true
-      Size (Pixels): 3
-      Size (m): 0.4000000059604645
-      Style: Boxes
-      Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        Filter size: 10
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Value: /objects_submap
-      Use Fixed Frame: true
-      Use rainbow: true
-      Value: true
-    - Alpha: 1
-      Autocompute Intensity Bounds: true
-      Autocompute Value Bounds:
-        Max Value: 10
-        Min Value: -10
-        Value: true
-      Axis: Z
-      Channel Name: intensity
-      Class: rviz_default_plugins/PointCloud2
-      Color: 38; 162; 105
-      Color Transformer: FlatColor
-      Decay Time: 0
-      Enabled: true
-      Invert Rainbow: false
-      Max Color: 255; 255; 255
-      Max Intensity: 4096
-      Min Color: 0; 0; 0
-      Min Intensity: 0
-      Name: PointCloud2
-      Position Transformer: XYZ
-      Selectable: true
-      Size (Pixels): 3
-      Size (m): 0.4000000059604645
-      Style: Boxes
-      Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        Filter size: 10
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Value: /objects_global
-      Use Fixed Frame: true
-      Use rainbow: true
-      Value: true
     - Class: rviz_default_plugins/Marker
       Enabled: true
       Name: Marker
@@ -372,30 +250,6 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /crop_box_marker
-      Value: true
-    - Class: rviz_default_plugins/MarkerArray
-      Enabled: true
-      Name: MarkerArray
-      Namespaces:
-        {}
-      Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Value: /unit_markers
-      Value: true
-    - Class: rviz_default_plugins/MarkerArray
-      Enabled: true
-      Name: MarkerArray
-      Namespaces:
-        {}
-      Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Value: /corridors
       Value: true
     - Alpha: 0.699999988079071
       Class: rviz_default_plugins/Map
@@ -423,7 +277,65 @@ Visualization Manager:
       Frame Timeout: 15
       Frames:
         All Enabled: true
+        FL_calf:
+          Value: true
+        FL_calflower:
+          Value: true
+        FL_calflower1:
+          Value: true
+        FL_foot:
+          Value: true
+        FL_hip:
+          Value: true
+        FL_thigh:
+          Value: true
+        FR_calf:
+          Value: true
+        FR_calflower:
+          Value: true
+        FR_calflower1:
+          Value: true
+        FR_foot:
+          Value: true
+        FR_hip:
+          Value: true
+        FR_thigh:
+          Value: true
+        Head_lower:
+          Value: true
+        Head_upper:
+          Value: true
+        RL_calf:
+          Value: true
+        RL_calflower:
+          Value: true
+        RL_calflower1:
+          Value: true
+        RL_foot:
+          Value: true
+        RL_hip:
+          Value: true
+        RL_thigh:
+          Value: true
+        RR_calf:
+          Value: true
+        RR_calflower:
+          Value: true
+        RR_calflower1:
+          Value: true
+        RR_foot:
+          Value: true
+        RR_hip:
+          Value: true
+        RR_thigh:
+          Value: true
+        base_footprint:
+          Value: true
         base_link:
+          Value: true
+        front_camera:
+          Value: true
+        imu:
           Value: true
         livox_frame:
           Value: true
@@ -431,11 +343,9 @@ Visualization Manager:
           Value: true
         map2d:
           Value: true
-        map2dglobal:
-          Value: true
         odom:
           Value: true
-        units:
+        radar:
           Value: true
       Marker Scale: 1
       Name: TF
@@ -445,15 +355,55 @@ Visualization Manager:
       Tree:
         odom:
           livox_frame:
+            FL_hip:
+              FL_thigh:
+                FL_calf:
+                  FL_calflower:
+                    FL_calflower1:
+                      {}
+                  FL_foot:
+                    {}
+            FR_hip:
+              FR_thigh:
+                FR_calf:
+                  FR_calflower:
+                    FR_calflower1:
+                      {}
+                  FR_foot:
+                    {}
+            Head_upper:
+              Head_lower:
+                {}
+              front_camera:
+                {}
+            RL_hip:
+              RL_thigh:
+                RL_calf:
+                  RL_calflower:
+                    RL_calflower1:
+                      {}
+                  RL_foot:
+                    {}
+            RR_hip:
+              RR_thigh:
+                RR_calf:
+                  RR_calflower:
+                    RR_calflower1:
+                      {}
+                  RR_foot:
+                    {}
+            base_footprint:
+              {}
             base_link:
+              {}
+            imu:
+              {}
+            radar:
               {}
           map:
             {}
           map2d:
-            map2dglobal:
-              {}
-            units:
-              {}
+            {}
       Update Interval: 0
       Value: true
     - Alpha: 1
@@ -496,6 +446,18 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /local_costmap/costmap_updates
       Use Timestamp: false
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: MarkerArray
+      Namespaces:
+        {}
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /topological_map_markers
       Value: true
   Enabled: true
   Global Options:
@@ -541,25 +503,25 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 16.727325439453125
+      Distance: 8.575139999389648
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: -0.7577399611473083
-        Y: 0.29485511779785156
-        Z: -0.2184985876083374
+        X: 0.10214217007160187
+        Y: -0.6224097609519958
+        Z: 0.487851083278656
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.2147940397262573
+      Pitch: 0.8447943925857544
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
-      Yaw: 2.005483627319336
+      Yaw: 1.7904834747314453
     Saved:
       - Class: rviz_default_plugins/Orbit
         Distance: 50.98590087890625
@@ -581,4 +543,23 @@ Visualization Manager:
         Target Frame: <Fixed Frame>
         Value: Orbit (rviz)
         Yaw: 2.790515184402466
-
+Window Geometry:
+  Displays:
+    collapsed: false
+  Height: 1103
+  Hide Left Dock: false
+  Hide Right Dock: false
+  Image:
+    collapsed: false
+  Navigation 2:
+    collapsed: false
+  QMainWindow State: 000000ff00000000fd000000010000000000000156000003f5fc0200000006fb0000000a0049006d006100670065010000003d000000e70000002800fffffffb000000100044006900730070006c006100790073010000012a000001c9000000c900fffffffb0000001200530065006c0065006300740069006f006e000000013a0000005c0000005c00fffffffb0000001e0054006f006f006c002000500072006f00700065007200740069006500730000000157000000670000005c00fffffffb0000000a00560069006500770073000000017c000000d0000000a400fffffffb00000018004e0061007600690067006100740069006f006e0020003201000002f9000001390000013900ffffff000005a3000003f500000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  Selection:
+    collapsed: false
+  Tool Properties:
+    collapsed: false
+  Views:
+    collapsed: false
+  Width: 1791
+  X: 1704
+  Y: 189

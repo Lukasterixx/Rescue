@@ -205,5 +205,5 @@ def generate_launch_description():
     ld.add_action(flatten_node)
     ld.add_action(container)
     ld.add_action(load_composables)
-    # ld.add_action(walk_bt)
+    ld.add_action(walk_bt)
     return ld
