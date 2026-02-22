@@ -105,7 +105,7 @@ BT::NodeStatus TopologicalMapperAction::onRunning()
 
                 if (!room_regenerated) {
                     RCLCPP_INFO(node_->get_logger(), "Robot cleared doorway threshold. Initiating new room mapping...");
-                    discoverNewRoom(rx, ry);
+                    discoverNewRoom(rx, ry); // Uses standard default box
                 }
                 
                 publishVisualizations();
@@ -155,6 +155,9 @@ cv::Mat TopologicalMapperAction::gridToMat(const nav_msgs::msg::OccupancyGrid& g
 
 bool TopologicalMapperAction::tryRegenerateRoom(int room_idx, double door_len, double rx, double ry)
 {
+    (void)rx; 
+    (void)ry;
+
     nav_msgs::msg::OccupancyGrid::SharedPtr map_copy;
     {
         std::lock_guard<std::mutex> lock(map_mutex_);
@@ -236,11 +239,9 @@ bool TopologicalMapperAction::tryRegenerateRoom(int room_idx, double door_len, d
 
     int min_expand_px = std::max(1, static_cast<int>(std::round((0.5 * door_len) / res)));
 
-    // 1. Did the room physically expand significantly?
     bool expanded_significantly = ((old_left - left >= min_expand_px) || (right - old_right >= min_expand_px) ||
                                    (old_top - top >= min_expand_px) || (bottom - old_bottom >= min_expand_px));
 
-    // 2. Did the doorway topology change (split or hit a wall)?
     int brush_outside = 4, brush_inside = 3;
     int min_door_width_px = 0.5 / res;
     int new_door_count = 0;
@@ -265,15 +266,24 @@ bool TopologicalMapperAction::tryRegenerateRoom(int room_idx, double door_len, d
 
     if (expanded_significantly || doorways_changed) {
         
-        double regen_x = rx;
-        double regen_y = ry;
+        // --- NEW: Calculate the 50% bounding box to bypass internal clutter ---
+        int orig_w = old_right - old_left;
+        int orig_h = old_bottom - old_top;
+        
+        // Contract the walls inwards by 25% on each side (leaving the middle 50%)
+        int init_l = old_left + orig_w / 4;
+        int init_r = old_right - orig_w / 4;
+        int init_t = old_top + orig_h / 4;
+        int init_b = old_bottom - orig_h / 4;
 
-        if (!expanded_significantly && doorways_changed) {
-            RCLCPP_INFO(node_->get_logger(), "Exception: Doorway topology changed on minor expansion (split/hit wall). Regenerating from old room center.");
-            regen_x = old_room.center.x;
-            regen_y = old_room.center.y;
+        // Fallback safeguard for impossibly tiny rooms
+        if (init_r <= init_l) { init_l = old_left; init_r = old_right; }
+        if (init_b <= init_t) { init_t = old_top; init_b = old_bottom; }
+
+        if (expanded_significantly) {
+            RCLCPP_INFO(node_->get_logger(), "Previous room expanded significantly! Deleting old boundaries and regenerating from 50%% core...");
         } else {
-            RCLCPP_INFO(node_->get_logger(), "Previous room was incomplete! Deleting old boundaries and regenerating from robot position...");
+            RCLCPP_INFO(node_->get_logger(), "Exception: Doorway topology changed on minor expansion. Regenerating from 50%% core.");
         }
 
         // 1. Delete the old doorways from the global list
@@ -287,15 +297,15 @@ bool TopologicalMapperAction::tryRegenerateRoom(int room_idx, double door_len, d
         // 2. Erase the incomplete room
         discovered_rooms_.erase(discovered_rooms_.begin() + room_idx);
 
-        // 3. Flood-fill a brand new room from the correct location
-        discoverNewRoom(regen_x, regen_y);
+        // 3. Flood-fill a brand new room using the 50% box boundaries!
+        discoverNewRoom(old_room.center.x, old_room.center.y, init_l, init_r, init_t, init_b);
         return true;
     }
 
     return false;
 }
 
-void TopologicalMapperAction::discoverNewRoom(double rx, double ry)
+void TopologicalMapperAction::discoverNewRoom(double rx, double ry, int init_l, int init_r, int init_t, int init_b)
 {
     nav_msgs::msg::OccupancyGrid::SharedPtr map_copy;
     {
@@ -332,11 +342,21 @@ void TopologicalMapperAction::discoverNewRoom(double rx, double ry)
     }
 
     double dominant_angle = 0.0; 
-    int box_size = 2;
-    int left = std::max(0, cx - box_size);
-    int right = std::min(img.cols - 1, cx + box_size);
-    int top = std::max(0, cy - box_size);
-    int bottom = std::min(img.rows - 1, cy + box_size);
+    
+    // --- UPDATED: Use the injected box or default to 2px box ---
+    int left, right, top, bottom;
+    if (init_l != -1 && init_r != -1 && init_t != -1 && init_b != -1) {
+        left = std::max(0, init_l);
+        right = std::min(img.cols - 1, init_r);
+        top = std::max(0, init_t);
+        bottom = std::min(img.rows - 1, init_b);
+    } else {
+        int box_size = 2;
+        left = std::max(0, cx - box_size);
+        right = std::min(img.cols - 1, cx + box_size);
+        top = std::max(0, cy - box_size);
+        bottom = std::min(img.rows - 1, cy + box_size);
+    }
 
     bool expand_left = true, expand_right = true, expand_top = true, expand_bottom = true;
     double stop_ratio = 0.20;
@@ -378,7 +398,6 @@ void TopologicalMapperAction::discoverNewRoom(double rx, double ry)
     new_room.color = getRandomColor();
     new_room.angle = dominant_angle;
     
-    // --- UPDATED: Store the geometric center for future topological regeneration ---
     new_room.center = cv::Point2f(origin_x + ((left + right) / 2.0) * res, 
                                   origin_y + ((top + bottom) / 2.0) * res);
     

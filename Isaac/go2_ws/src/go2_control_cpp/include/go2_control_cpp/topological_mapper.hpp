@@ -68,7 +68,7 @@ private:
     void mapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg);
     int getRobotRoomIndex(double rx, double ry); // Changed to return index
     bool tryRegenerateRoom(int room_idx, double door_len, double rx, double ry); // NEW
-    void discoverNewRoom(double rx, double ry);
+    void discoverNewRoom(double rx, double ry, int init_l = -1, int init_r = -1, int init_t = -1, int init_b = -1);    
     cv::Mat gridToMat(const nav_msgs::msg::OccupancyGrid& grid);
     std_msgs::msg::ColorRGBA getRandomColor();
     void publishVisualizations();

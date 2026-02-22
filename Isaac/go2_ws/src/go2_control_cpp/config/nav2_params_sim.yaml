@@ -204,7 +204,7 @@ controller_server:
 
       # --- CRITICS TUNING ---
       # Added "Oscillation" to the list
-      critics: ["RotateToGoal", "ObstacleFootprint", "PathDist", "PathAlign", "GoalDist", "GoalAlign", "Oscillation"]
+      critics: ["RotateToGoal", "PathDist", "PathAlign", "GoalDist", "GoalAlign", "Oscillation"]
       ObstacleFootprint.scale: 0.01
       ObstacleFootprint.sum_scores: true # false = if any point hits, it's lethal (safer)
       
@@ -259,15 +259,15 @@ local_costmap:
       robot_base_frame: livox_frame
       use_sim_time: True
       rolling_window: true
-      width: 3
-      height: 3
+      width: 2
+      height: 2
       resolution: 0.1
-      footprint: "[ [0.25, 0.1], [0.25, -0.1], [-0.25, -0.1], [-0.25, 0.1] ]"
+      footprint: "[ [0.35, 0.2], [0.35, -0.2], [-0.35, -0.2], [-0.35, 0.2] ]"
       footprint_padding: 0.02 # Added a small 2cm safety buffer
       plugins: ["inflation_layer", "static_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 5.0
+        cost_scaling_factor: 10.0
         inflation_radius: 0.5
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
@@ -287,7 +287,7 @@ global_costmap:
       inscribed_obstacle_cost_value: 10
       trinary_costmap: false
       use_sim_time: True
-      footprint: "[ [0.25, 0.1], [0.25, -0.1], [-0.25, -0.1], [-0.25, 0.1] ]"
+      footprint: "[ [0.35, 0.2], [0.35, -0.2], [-0.35, -0.2], [-0.35, 0.2] ]"
       footprint_padding: 0.02 # Added a small 2cm safety buffer
       resolution: 0.1
       track_unknown_space: false
