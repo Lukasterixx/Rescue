@@ -209,7 +209,7 @@ controller_server:
       ObstacleFootprint.sum_scores: true # false = if any point hits, it's lethal (safer)
       
       # PATH DISTANCE (Highest Priority: Stay on the line)
-      PathDist.scale: 46.0
+      PathDist.scale: 24.0
       
       # PATH ALIGN (High Priority: Follow the curve of the line)
       PathAlign.scale: 32.0
@@ -326,7 +326,7 @@ planner_server:
       max_on_approach_iterations: 1000   
       max_planning_time: 5.0             
       cost_travel_multiplier: 1.0
-      use_final_approach_orientation: true # Essential for aligning with your waypoints
+      use_final_approach_orientation: false # Essential for aligning with your waypoints
       smoother:
         max_iterations: 1000
         w_smooth: 0.3
