@@ -182,16 +182,16 @@ controller_server:
       min_vel_y: -0.8
       max_vel_x: 0.8
       max_vel_y: 0.8
-      max_vel_theta: 1.3
+      max_vel_theta: 1.2
       min_speed_xy: 0.0
       max_speed_xy: 1.2
       min_speed_theta: 0.0
-      acc_lim_x: 1.2
-      acc_lim_y: 1.2
-      acc_lim_theta: 1.0
+      acc_lim_x: 1.0
+      acc_lim_y: 1.0
+      acc_lim_theta: 2.0
       decel_lim_x: -1.0
       decel_lim_y: -1.0
-      decel_lim_theta: -1.0
+      decel_lim_theta: -2.0
       vx_samples: 20
       vy_samples: 10
       vtheta_samples: 15
@@ -199,7 +199,7 @@ controller_server:
       linear_granularity: 0.05
       angular_granularity: 0.025
       transform_tolerance: 10.0
-      xy_goal_tolerance: 0.05
+      xy_goal_tolerance: 0.1
       trans_stopped_velocity: 0.01
 
       # --- CRITICS TUNING ---
@@ -217,14 +217,14 @@ controller_server:
       
       # GOAL ALIGN (Low Priority: Tie-breaker only)
       # Reduced from 24.0 to 10.0. This stops it from ignoring the path.
-      GoalAlign.scale: 10.0
+      GoalAlign.scale: 32.0
       GoalAlign.forward_point_distance: 0.2
 
       GoalDist.scale: 10.0
       
       # ROTATE TO GOAL (Only happens AT the goal)
       RotateToGoal.scale: 128.0
-      RotateToGoal.slowing_factor: 2.0
+      RotateToGoal.slowing_factor: 1.0
       RotateToGoal.lookahead_time: -1.0
       
       # OSCILLATION (Prevents the wobble)
@@ -232,7 +232,7 @@ controller_server:
       Oscillation.oscillation_reset_dist: 0.05
       
       trans_stopped_velocity: 0.1
-      short_circuit_trajectory_evaluation: false
+      short_circuit_trajectory_evaluation: true
       stateful: True
 
 velocity_smoother:

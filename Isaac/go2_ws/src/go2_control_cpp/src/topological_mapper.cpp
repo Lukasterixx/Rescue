@@ -105,7 +105,7 @@ BT::NodeStatus TopologicalMapperAction::onRunning()
 
                 if (!room_regenerated) {
                     RCLCPP_INFO(node_->get_logger(), "Robot cleared doorway threshold. Initiating new room mapping...");
-                    discoverNewRoom(rx, ry); // Uses standard default box
+                    discoverNewRoom(rx, ry);
                 }
                 
                 publishVisualizations();
@@ -320,6 +320,14 @@ void TopologicalMapperAction::discoverNewRoom(double rx, double ry, int init_l, 
 
     int cx = std::round((rx - origin_x) / res);
     int cy = std::round((ry - origin_y) / res);
+
+    // --- NEW SAFETY GUARD ---
+    // 2. Prevent generating a room if the seed point is already inside an existing room
+    if (getRobotRoomIndex(rx, ry) != -1) {
+        RCLCPP_WARN(node_->get_logger(), "Safety Guard: Seed point (%.2f, %.2f) is already inside an existing room. Aborting generation.", rx, ry);
+        return;
+    }
+    // ------------------------
 
     if (cx < 0 || cx >= img.cols || cy < 0 || cy >= img.rows) return;
 
