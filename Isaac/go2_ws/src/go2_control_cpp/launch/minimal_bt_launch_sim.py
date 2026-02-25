@@ -196,6 +196,27 @@ def generate_launch_description():
 
     # ld.add_action(foxglove_bridge_node)
 
+
+    # Static TF: livox_frame -> base_link
+    # X: -0.16m, Y: 0.0m, Z: -0.09m
+    # Roll: 0.0, Pitch: -0.349066 rad (-20 deg, nose up), Yaw: 0.0
+    livox_to_base_link_tf = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='livox_to_base_link_tf',
+        output='screen',
+        arguments=[
+            '--x', '0.0',
+            '--y', '0.0',
+            '--z', '0.0',
+            '--yaw', '0.0',
+            '--pitch', '0.0',
+            '--roll', '0.0',
+            '--frame-id', 'livox_frame',
+            '--child-frame-id', 'base_link'
+        ]
+    )
+
     # 3) Assemble the launch description
     
     ld.add_action(stdout_linebuf_envvar)
@@ -206,4 +227,5 @@ def generate_launch_description():
     ld.add_action(container)
     ld.add_action(load_composables)
     ld.add_action(walk_bt)
+    ld.add_action(livox_to_base_link_tf)
     return ld

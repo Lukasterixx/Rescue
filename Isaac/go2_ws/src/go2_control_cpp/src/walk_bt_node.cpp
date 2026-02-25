@@ -11,7 +11,7 @@
 
 #include "go2_control_cpp/topological_mapper.hpp"
 #include "go2_control_cpp/distance_controller.hpp"
-
+#include "go2_control_cpp/room_explorer.hpp"
 
 
 using namespace std::chrono_literals;
@@ -59,6 +59,11 @@ void WalkBTNode::init(SharedPtr self)
     "TopologicalMapperAction",
     [](const std::string & name, const BT::NodeConfiguration & config) {
       return std::make_unique<TopologicalMapperAction>(name, config);
+    });
+  factory_.registerBuilder<RoomExplorerAction>(
+    "RoomExplorerAction",
+    [](const std::string & name, const BT::NodeConfiguration & config) {
+      return std::make_unique<RoomExplorerAction>(name, config);
     });
 
   // 2) Create a Blackboard, inject our ROS Node handle, then load the XML

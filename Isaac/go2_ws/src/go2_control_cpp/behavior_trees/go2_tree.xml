@@ -3,10 +3,17 @@
       main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
     <Nav2Ready topic="/nav2_ready">
-      <Sequence>
+      <Parallel failure_threshold="-1"
+                success_threshold="-1">
         <TopologicalMapperAction global_frame="odom"
-                                 robot_frame="livox_frame"/>
-      </Sequence>
+                                 robot_frame="livox_frame"
+                                 topological_tree="{room_tree}"/>
+        <RoomExplorerAction topological_tree="{room_tree}"
+                            global_frame="odom"
+                            robot_frame="base_link"
+                            action_name="go2_navigator"
+                            goal_pose="{door_pos}"/>
+      </Parallel>
     </Nav2Ready>
   </BehaviorTree>
 
@@ -17,6 +24,23 @@
                   default="/nav2_ready"
                   type="string"/>
     </Control>
+    <Action ID="RoomExplorerAction">
+      <input_port name="topological_tree"
+                  default="{room_tree}"
+                  type="std::shared_ptr&lt;TopologicalTree&gt;"/>
+      <input_port name="global_frame"
+                  default="odom"
+                  type="string"/>
+      <input_port name="robot_frame"
+                  default="base_link"
+                  type="string"/>
+      <input_port name="action_name"
+                  default="navigate_to_pose"
+                  type="string"/>
+      <output_port name="goal_pose"
+                   default="{door_pos}"
+                   type="geometry_msgs::msg::PoseStamped"/>
+    </Action>
     <Action ID="TopologicalMapperAction">
       <input_port name="global_frame"
                   default="odom"
@@ -24,6 +48,8 @@
       <input_port name="robot_frame"
                   default="livox_frame"
                   type="string"/>
+      <output_port name="topological_tree"
+                   default="{room_tree}"/>
     </Action>
   </TreeNodesModel>
 

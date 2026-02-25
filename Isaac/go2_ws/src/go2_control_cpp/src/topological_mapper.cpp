@@ -11,8 +11,9 @@ namespace go2_control_cpp
 TopologicalMapperAction::TopologicalMapperAction(const std::string& name, const BT::NodeConfiguration& config)
     : BT::StatefulActionNode(name, config),
       node_(rclcpp::Node::make_shared("topological_mapper_node")),
-      last_attempt_time_(node_->get_clock()->now()),
-      last_room_idx_(-1)
+      last_attempt_pos_(1e9, 1e9), // Moved up to match header order
+      last_room_idx_(-1),
+      next_room_id_(0)
 {
     sub_map_ = node_->create_subscription<nav_msgs::msg::OccupancyGrid>(
         "/map2d", 10, std::bind(&TopologicalMapperAction::mapCallback, this, std::placeholders::_1));
@@ -37,7 +38,8 @@ BT::PortsList TopologicalMapperAction::providedPorts()
 {
     return { 
         BT::InputPort<std::string>("robot_frame", "livox_frame", "Frame attached to robot"),
-        BT::InputPort<std::string>("global_frame", "odom", "Global frame (origin)")
+        BT::InputPort<std::string>("global_frame", "odom", "Global frame (origin)"),
+        BT::OutputPort<std::shared_ptr<TopologicalTree>>("topological_tree") // NEW
     };
 }
 
@@ -87,15 +89,18 @@ BT::NodeStatus TopologicalMapperAction::onRunning()
                 }
             }
 
-            double required_dist = 0.5 * nearest_door_len;
+            double required_dist = 0.3 * nearest_door_len;
             if (min_dist >= required_dist) {
                 safe_to_map = true;
             }
         }
 
         if (safe_to_map) {
-            auto now = node_->get_clock()->now();
-            if ((now - last_attempt_time_).seconds() > 2.0) {
+            // NEW: Calculate how far the robot has traveled since the last mapping attempt
+            double dist_since_last_attempt = cv::norm(cv::Point2f(rx, ry) - last_attempt_pos_);
+            
+            // NEW: Only attempt to map if we've moved at least 0.5m since the last attempt
+            if (dist_since_last_attempt > 0.5) {
                 
                 bool room_regenerated = false;
                 
@@ -105,12 +110,18 @@ BT::NodeStatus TopologicalMapperAction::onRunning()
 
                 if (!room_regenerated) {
                     RCLCPP_INFO(node_->get_logger(), "Robot cleared doorway threshold. Initiating new room mapping...");
-                    discoverNewRoom(rx, ry);
+                    
+                    int parent_id = (last_room_idx_ != -1 && last_room_idx_ < static_cast<int>(discovered_rooms_.size())) 
+                                    ? discovered_rooms_[last_room_idx_].id : -1;
+                    
+                    discoverNewRoom(rx, ry, parent_id);
                 }
                 
+                updateBlackboardAndSave();
                 publishVisualizations();
-                last_attempt_time_ = now;
-                last_room_idx_ = -1; 
+                
+                // NEW: Update the position of our last attempt
+                last_attempt_pos_ = cv::Point2f(rx, ry); 
             }
         }
     }
@@ -294,18 +305,38 @@ bool TopologicalMapperAction::tryRegenerateRoom(int room_idx, double door_len, d
                 }), all_doorways_.end());
         }
 
-        // 2. Erase the incomplete room
+        // 2 & 3. PRESERVE TREE LOGIC: Safely substitute the room
+        Room preserved_room = discovered_rooms_[room_idx]; // Make a full copy
+        
+        // NEW: Temporarily remove the old room so the safety guard doesn't trip on it
         discovered_rooms_.erase(discovered_rooms_.begin() + room_idx);
+        size_t size_before = discovered_rooms_.size();
+        
+        // Pass preserved_room.center instead of old_room.center (since old_room reference is now invalid)
+        discoverNewRoom(preserved_room.center.x, preserved_room.center.y, -1, init_l, init_r, init_t, init_b);
+        
+        if (discovered_rooms_.size() > size_before) {
+            Room newly_generated_room = discovered_rooms_.back();
+            discovered_rooms_.pop_back(); // Remove from end
+            
+            // Restore tree properties
+            newly_generated_room.id = preserved_room.id;
+            newly_generated_room.parent_id = preserved_room.parent_id;
+            newly_generated_room.children_ids = preserved_room.children_ids;
+            
+            // Insert back in place!
+            discovered_rooms_.insert(discovered_rooms_.begin() + room_idx, newly_generated_room);
+        } else {
+            // Safety fallback: If generation failed, put the old room back
+            discovered_rooms_.insert(discovered_rooms_.begin() + room_idx, preserved_room);
+        }
 
-        // 3. Flood-fill a brand new room using the 50% box boundaries!
-        discoverNewRoom(old_room.center.x, old_room.center.y, init_l, init_r, init_t, init_b);
         return true;
     }
-
     return false;
 }
 
-void TopologicalMapperAction::discoverNewRoom(double rx, double ry, int init_l, int init_r, int init_t, int init_b)
+void TopologicalMapperAction::discoverNewRoom(double rx, double ry, int parent_id, int init_l, int init_r, int init_t, int init_b)
 {
     nav_msgs::msg::OccupancyGrid::SharedPtr map_copy;
     {
@@ -430,6 +461,8 @@ void TopologicalMapperAction::discoverNewRoom(double rx, double ry, int init_l, 
             Doorway d;
             d.p1 = pixToWorld(left + seg.first, top);
             d.p2 = pixToWorld(left + seg.second, top);
+            cv::Point2f m = (d.p1 + d.p2) / 2.0;
+            d.angle = std::atan2(m.y - new_room.center.y, m.x - new_room.center.x); // <-- NEW
             new_room.doors.push_back(d);
             all_doorways_.push_back(d);
         }
@@ -444,6 +477,8 @@ void TopologicalMapperAction::discoverNewRoom(double rx, double ry, int init_l, 
             Doorway d;
             d.p1 = pixToWorld(left + seg.first, bottom);
             d.p2 = pixToWorld(left + seg.second, bottom);
+            cv::Point2f m = (d.p1 + d.p2) / 2.0;
+            d.angle = std::atan2(m.y - new_room.center.y, m.x - new_room.center.x); // <-- NEW
             new_room.doors.push_back(d);
             all_doorways_.push_back(d);
         }
@@ -458,6 +493,8 @@ void TopologicalMapperAction::discoverNewRoom(double rx, double ry, int init_l, 
             Doorway d;
             d.p1 = pixToWorld(left, top + seg.first);
             d.p2 = pixToWorld(left, top + seg.second);
+            cv::Point2f m = (d.p1 + d.p2) / 2.0;
+            d.angle = std::atan2(m.y - new_room.center.y, m.x - new_room.center.x); // <-- NEW
             new_room.doors.push_back(d);
             all_doorways_.push_back(d);
         }
@@ -472,13 +509,28 @@ void TopologicalMapperAction::discoverNewRoom(double rx, double ry, int init_l, 
             Doorway d;
             d.p1 = pixToWorld(right, top + seg.first);
             d.p2 = pixToWorld(right, top + seg.second);
+            cv::Point2f m = (d.p1 + d.p2) / 2.0;
+            d.angle = std::atan2(m.y - new_room.center.y, m.x - new_room.center.x); // <-- NEW
             new_room.doors.push_back(d);
             all_doorways_.push_back(d);
         }
     }
 
+    // Near the end, setup the room ID and Tree logic
+    new_room.id = next_room_id_++;
+    new_room.parent_id = parent_id;
+
+    // Add this new room as a child to its parent
+    if (parent_id != -1) {
+        auto it = std::find_if(discovered_rooms_.begin(), discovered_rooms_.end(), 
+            [&](const Room& r) { return r.id == parent_id; });
+        if (it != discovered_rooms_.end()) {
+            it->children_ids.push_back(new_room.id);
+        }
+    }
+
     discovered_rooms_.push_back(new_room);
-    RCLCPP_INFO(node_->get_logger(), "New room registered. Total rooms: %zu", discovered_rooms_.size());
+    RCLCPP_INFO(node_->get_logger(), "New room registered (ID: %d). Total rooms: %zu", new_room.id, discovered_rooms_.size());
 }
 
 std::vector<std::pair<int, int>> TopologicalMapperAction::extractDoorwaysBrush(const cv::Mat& region, int axis, int min_width)
@@ -569,6 +621,91 @@ void TopologicalMapperAction::publishVisualizations()
     
     if (!doors.points.empty()) msg.markers.push_back(doors);
     pub_markers_->publish(msg);
+}
+
+void TopologicalMapperAction::updateBlackboardAndSave()
+{
+    // 1. Export to BehaviorTree Blackboard
+    auto tree = std::make_shared<TopologicalTree>();
+    for (const auto& r : discovered_rooms_) {
+        TopologicalNode node;
+        node.id = r.id;
+        node.parent_id = r.parent_id;
+        node.children_ids = r.children_ids;
+        node.center = r.center;
+        
+        // NEW: Copy the door endpoint pairs to the exported node
+        node.doors = r.doors; 
+        node.corners = r.corners;
+        tree->nodes.push_back(node);
+    }
+    setOutput("topological_tree", tree);
+
+    // 2. Render and save the Image
+    saveTopologicalImage();
+}
+
+void TopologicalMapperAction::saveTopologicalImage()
+{
+    if (discovered_rooms_.empty()) return;
+
+    try {
+        std::string pkg_share = ament_index_cpp::get_package_share_directory("go2_control_cpp");
+        std::string dir = pkg_share + "/maps";
+        std::filesystem::create_directories(dir);
+        std::string filepath = dir + "/topological_tree.png";
+
+        // Find bounding box to scale image properly
+        double min_x = 1e9, max_x = -1e9, min_y = 1e9, max_y = -1e9;
+        for (const auto& r : discovered_rooms_) {
+            if (r.center.x < min_x) min_x = r.center.x;
+            if (r.center.x > max_x) max_x = r.center.x;
+            if (r.center.y < min_y) min_y = r.center.y;
+            if (r.center.y > max_y) max_y = r.center.y;
+        }
+
+        int img_size = 800;
+        int padding = 100;
+        cv::Mat img(img_size, img_size, CV_8UC3, cv::Scalar(240, 240, 240)); // Light grey background
+
+        // Lambda to map physical coordinates to image pixel space
+        auto worldToImg = [&](const cv::Point2f& pt) {
+            double scale = std::min((img_size - 2 * padding) / std::max(max_x - min_x, 0.01),
+                                    (img_size - 2 * padding) / std::max(max_y - min_y, 0.01));
+            int x = padding + (pt.x - min_x) * scale;
+            int y = img_size - (padding + (pt.y - min_y) * scale); // Invert Y-axis for standard visualization
+            return cv::Point(x, y);
+        };
+
+        // Draw Edges (Doorways linking parents/children)
+        for (const auto& r : discovered_rooms_) {
+            if (r.parent_id != -1) {
+                auto it = std::find_if(discovered_rooms_.begin(), discovered_rooms_.end(), 
+                    [&](const Room& rm) { return rm.id == r.parent_id; });
+                if (it != discovered_rooms_.end()) {
+                    cv::line(img, worldToImg(r.center), worldToImg(it->center), cv::Scalar(100, 100, 100), 4, cv::LINE_AA);
+                }
+            }
+        }
+
+        // Draw Nodes (Rooms)
+        for (const auto& r : discovered_rooms_) {
+            cv::Point pt = worldToImg(r.center);
+            cv::circle(img, pt, 25, cv::Scalar(150, 200, 100), -1, cv::LINE_AA); // Fill
+            cv::circle(img, pt, 25, cv::Scalar(50, 100, 50), 3, cv::LINE_AA);   // Outline
+            
+            // Add ID text
+            std::string text = std::to_string(r.id);
+            int baseline = 0;
+            cv::Size text_size = cv::getTextSize(text, cv::FONT_HERSHEY_SIMPLEX, 0.8, 2, &baseline);
+            cv::Point text_origin(pt.x - text_size.width / 2, pt.y + text_size.height / 2);
+            cv::putText(img, text, text_origin, cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0, 0, 0), 2, cv::LINE_AA);
+        }
+
+        cv::imwrite(filepath, img);
+    } catch (const std::exception& e) {
+        RCLCPP_ERROR(node_->get_logger(), "Failed to save topological map image: %s", e.what());
+    }
 }
 
 } // namespace go2_control_cpp

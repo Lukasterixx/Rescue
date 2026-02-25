@@ -132,7 +132,7 @@ ament_target_dependencies(go2_run_once_node
 )
 target_compile_definitions(go2_run_once_node PRIVATE BT_PLUGIN_EXPORT)
 
-# FrontierExplore BT node
+# Topological mapper BT node
 add_library(go2_topological_mapper_node SHARED src/topological_mapper.cpp)
 target_include_directories(go2_topological_mapper_node PUBLIC include)
 ament_target_dependencies(go2_topological_mapper_node
@@ -143,6 +143,19 @@ ament_target_dependencies(go2_topological_mapper_node
 )
 target_compile_definitions(go2_topological_mapper_node PRIVATE BT_PLUGIN_EXPORT)
 target_link_libraries(go2_topological_mapper_node
+  ${OpenCV_LIBS}
+)
+
+# Room explorer
+add_library(go2_room_explorer_node SHARED src/room_explorer.cpp)
+target_include_directories(go2_room_explorer_node PUBLIC include)
+ament_target_dependencies(go2_room_explorer_node
+  ${common_deps}
+  tf2
+  tf2_geometry_msgs
+)
+target_compile_definitions(go2_room_explorer_node PRIVATE BT_PLUGIN_EXPORT)
+target_link_libraries(go2_room_explorer_node
   ${OpenCV_LIBS}
 )
 
@@ -205,6 +218,7 @@ install(
     go2_run_once_node
     go2_topological_mapper_node
     go2_distance_tick_controller_node
+    go2_room_explorer_node
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
@@ -321,6 +335,7 @@ target_link_libraries(walk_bt_node
   go2_run_once_node
   go2_topological_mapper_node
   go2_distance_tick_controller_node
+  go2_room_explorer_node
 )
 
 install(

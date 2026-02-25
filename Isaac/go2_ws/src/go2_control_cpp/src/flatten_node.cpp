@@ -89,14 +89,6 @@ public:
     tf_odom_map2d.transform.rotation.w = 1.0;
     static_transforms.push_back(tf_odom_map2d);
 
-    // 3. livox_frame -> base_link
-    geometry_msgs::msg::TransformStamped tf_sensor_base;
-    tf_sensor_base.header.stamp = now;
-    tf_sensor_base.header.frame_id = base_frame_; 
-    tf_sensor_base.child_frame_id = "base_link";  
-    tf_sensor_base.transform.rotation.w = 1.0;
-    static_transforms.push_back(tf_sensor_base);
-
     static_broadcaster_->sendTransform(static_transforms);
 
     // --- Compute Fixed Map Size ---

@@ -3,26 +3,32 @@
 
     <Action ID="Map2DSaver"/>
 
-    <!-- Nav2Ready control node -->
     <Control ID="Nav2Ready">
       <input_port name="topic" type="string" default="/nav2_ready" description="Topic name to wait for nav2 ready signal"/>
     </Control>
 
-    <!-- RunOnce control node: ticks its child exactly once -->
     <Control ID="RunOnce"/>
 
-    <!-- FrontierExplore BT node: frontier-based exploration, avoiding long 2:1+ rows -->
     <Action ID="TopologicalMapperAction">
-      <input_port name="global_frame"   type="string" default="odom"  description="Global frame"/>
-      <input_port name="robot_frame"     type="string" default="livox_frame" description="Robot base frame (TF)"/>
+      <input_port name="global_frame" type="string" default="odom" description="Global frame"/>
+      <input_port name="robot_frame" type="string" default="livox_frame" description="Robot base frame (TF)"/>
+      <output_port name="topological_tree" default="{room_tree}" description="Shared pointer to the TopologicalTree structure containing rooms and door endpoints"/>
     </Action>
     
-    <!-- DistanceTickController: warm-up all children (until done), then tick once per distance -->
     <Control ID="DistanceTickController">
-      <input_port name="dist_m"                type="double"  default="0.5"       description="Distance interval (m) to trigger children"/>
-      <input_port name="global_frame"          type="string"  default="odom"       description="TF global frame"/>
-      <input_port name="base_frame"            type="string"  default="livox_frame" description="TF base frame"/>
-      <input_port name="warmup_require_success" type="bool"    default="true"     description="If true, warm-up requires SUCCESS; if false, SUCCESS or FAILURE counts as done"/>
+      <input_port name="dist_m" type="double" default="0.5" description="Distance interval (m) to trigger children"/>
+      <input_port name="global_frame" type="string" default="odom" description="TF global frame"/>
+      <input_port name="base_frame" type="string" default="livox_frame" description="TF base frame"/>
+      <input_port name="warmup_require_success" type="bool" default="true" description="If true, warm-up requires SUCCESS; if false, SUCCESS or FAILURE counts as done"/>
     </Control>
+
+    <Action ID="RoomExplorerAction">
+      <input_port name="topological_tree" default="{room_tree}" type="std::shared_ptr&lt;TopologicalTree&gt;"/>
+      <input_port name="global_frame" default="odom" type="string"/>
+      <input_port name="robot_frame" default="base_link" type="string"/>
+      <input_port name="action_name" default="navigate_to_pose" type="string"/>
+      <output_port name="goal_pose" default="{door_pos}" type="geometry_msgs::msg::PoseStamped"/>
+    </Action>
+
   </TreeNodesModel>
 </root>
