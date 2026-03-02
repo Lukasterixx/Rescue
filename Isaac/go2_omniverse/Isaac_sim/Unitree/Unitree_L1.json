@@ -10,7 +10,7 @@
       "scanType": "rotary",
       "intensityProcessing": "normalization",
       "rayType": "IDEALIZED",
-      "nearRangeM": 0.5, "comment4" : "OPTICAL PERFORMANCE-Minimum Range 0.5 m default for point cloud data",
+      "nearRangeM": 0.65, "comment4" : "OPTICAL PERFORMANCE-Minimum Range 0.5 m default for point cloud data",
       "farRangeM": 75.0, "comment5" : "OPTICAL PERFORMANCE- 75 m @ 100 klx sunlight, >90% detection probability",
       
       "startAzimuthDeg": 0.0, "comment6" : "x+ is 0°  y+ is 90° (and z is up, right handed)",

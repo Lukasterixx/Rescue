@@ -130,28 +130,22 @@ def compute_time_from_azimuth(points_xyz: np.ndarray, scan_period: float,
 
 def update_meshes_for_cloud2(position_array, origin, rot):
     pts = position_array.copy()
+    # Apply X offset (forward 20cm)
+    pts[:, 0] += 0.2 
+    # Keep Z offset (up 40cm)
     pts[:, 2] += 0.4
     return pts
 
 def add_rtx_lidar(num_envs, robot_type, debug=False):
     annotator_lst = []
     for i in range(num_envs):
-        if robot_type == "g1":
-            lidar_sensor = LidarRtx(f'/World/envs/env_{i}/Robot/head_link/lidar_sensor',
-                                    rotation_frequency = 200,
-                                    pulse_time=1, 
-                                    translation=(0.0, 0.0, 0.0),
-                                    orientation=(1.0, 0.0, 0.0, 0.0),
-                                    config_file_name= "Unitree_L1",
+        lidar_sensor = LidarRtx(f'/World/envs/env_{i}/Robot/base/lidar_sensor',
+                                rotation_frequency = 10,
+                                pulse_time=1, 
+                                translation=(0.2, 0, 0.4),
+                                orientation=(1.0, 0.0, 0.0, 0.0),
+                                config_file_name= "Unitree_L1",
                                 )
-        else:
-            lidar_sensor = LidarRtx(f'/World/envs/env_{i}/Robot/base/lidar_sensor',
-                                    rotation_frequency = 10,
-                                    pulse_time=1, 
-                                    translation=(0.0, 0, 0.4),
-                                    orientation=(1.0, 0.0, 0.0, 0.0),
-                                    config_file_name= "Unitree_L1",
-                                    )
 
         if debug:
             writer = rep.writers.get("RtxLidar" + "DebugDrawPointCloudBuffer")
@@ -344,6 +338,11 @@ class RobotBaseNode(Node):
         self._last_lin_vel_b = np.zeros((num_envs, 3), dtype=float)
         self._last_time_ns = None
 
+        # --- NEW: Arm Command Subscriber ---
+        from sensor_msgs.msg import JointState
+        self.arm_joint_targets = None
+        self.create_subscription(JointState, '/arm_commands', self._arm_cmd_cb, 10)
+
         # --- NEW: Return to Base Publisher ---
         self.return_pub = self.create_publisher(Empty, '/return_to_base', 10)
 
@@ -404,6 +403,12 @@ class RobotBaseNode(Node):
         self.static_broadcaster = StaticTransformBroadcaster(self)
 
         self._publish_static_map_odom()
+    
+    def _arm_cmd_cb(self, msg):
+        """Stores incoming ROS 2 joint targets for the arm."""
+        import numpy as np
+        # Convert the incoming ROS positions into a numpy array
+        self.arm_joint_targets = np.array(msg.position, dtype=np.float32)
 
     # --- NEW: Helper method to publish the static transform ---
     def _publish_static_map_odom(self):

@@ -72,6 +72,7 @@ from omnigraph import create_front_cam_omnigraph
 # USD helpers (for moving the warehouse visually)
 import omni.usd
 from pxr import UsdGeom, Gf, Tf
+from omni.isaac.orbit.utils.math import quat_apply
 
 
 # ===================== Warehouse Visual Offset (purely visual) =====================
@@ -95,6 +96,43 @@ _ENV_REF = None
 # --- NEW: Reference to ROS node for resetting odom ---
 _ROS_NODE_REF = None
 
+from omni.isaac.core.articulations import ArticulationView
+import omni.isaac.core.utils.prims as prim_utils
+
+import numpy as np
+
+import os
+
+def generate_arm_usd():
+    """Converts the URDF to a USD file and returns the path."""
+    from omni.isaac.core.utils.extensions import enable_extension
+    enable_extension("omni.importer.urdf")
+    import omni.importer.urdf as urdf_importer
+    import omni.kit.commands
+    
+    urdf_interface = urdf_importer._urdf.acquire_urdf_interface()
+    import_config = urdf_importer._urdf.ImportConfig()
+    import_config.merge_fixed_joints = False
+    import_config.fix_base = False 
+    import_config.make_default_prim = True 
+    
+    project_root = os.path.dirname(os.path.abspath(__file__)) 
+    urdf_path = os.path.join(project_root, "z1_arm", "z1.urdf")
+    dest_usd_path = os.path.join(project_root, "z1_arm", "z1.usd")
+    
+    if os.path.exists(dest_usd_path):
+        os.remove(dest_usd_path)
+        
+    print(f"[INFO] Converting URDF to USD: {dest_usd_path}")
+    
+    omni.kit.commands.execute(
+        "URDFParseAndImportFile",
+        urdf_path=urdf_path,
+        import_config=import_config,
+        dest_path=dest_usd_path
+    )
+    
+    return dest_usd_path
 
 def _stage():
     return omni.usd.get_context().get_stage()
@@ -511,6 +549,34 @@ def run_sim():
         env_cfg = G1RoughEnvCfg()
     env_cfg.scene.num_envs = args_cli.robot_amount
 
+    # --- NEW: NATIVE ORBIT ARM INTEGRATION ---
+    dest_usd_path = generate_arm_usd()
+    
+    from omni.isaac.orbit.assets import ArticulationCfg
+    from omni.isaac.orbit.actuators import ImplicitActuatorCfg
+    
+    # We natively inject the arm into the Orbit configuration
+    env_cfg.scene.arm = ArticulationCfg(
+        prim_path="{ENV_REGEX_NS}/Arm",
+        spawn=sim_utils.UsdFileCfg(
+            usd_path=dest_usd_path,
+            # Disable gravity so the arm floats perfectly before we teleport it
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(disable_gravity=True),
+            collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=False),
+        ),
+        init_state=ArticulationCfg.InitialStateCfg(
+            pos=(0.0, 0.0, 0.4),
+        ),
+        actuators={
+            "arm_joints": ImplicitActuatorCfg(
+                joint_names_expr=[".*"],
+                stiffness=400.0,
+                damping=40.0,
+            )
+        }
+    )
+    # -----------------------------------------
+
     # ROS camera graph(s)
     for i in range(env_cfg.scene.num_envs):
         create_front_cam_omnigraph(i)
@@ -529,14 +595,10 @@ def run_sim():
     # load policy
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg["experiment_name"])
     log_root_path = os.path.abspath(log_root_path)
-    print(f"[INFO] Loading experiment from directory: {log_root_path}")
     resume_path = get_checkpoint_path(log_root_path, agent_cfg["load_run"], agent_cfg["load_checkpoint"])
-    print(f"[INFO]: Loading model checkpoint from: {resume_path}")
-
+    
     ppo_runner = OnPolicyRunner(env, agent_cfg, log_dir=None, device=agent_cfg["device"])
     ppo_runner.load(resume_path)
-    print(f"[INFO]: Loading model checkpoint from: {resume_path}")
-
     policy = ppo_runner.get_inference_policy(device=env.unwrapped.device)
 
     # first obs
@@ -577,6 +639,38 @@ def run_sim():
     while simulation_app.is_running():
 
         with torch.inference_mode():
+            
+            # --- 1. Pin the Arm using Native Orbit API ---
+            robot = env.unwrapped.scene["robot"]
+            arm = env.unwrapped.scene["arm"]
+            
+            # Grab the current base position and orientation
+            root_pose = robot.data.root_state_w[:, :7].clone()
+            
+            # A. Local offset: 30cm forward (+0.3 X), flush height (0.0 Z)
+            local_offset = torch.tensor([[0.0, 0.0, 0.0]], device=env.unwrapped.device, dtype=torch.float32)
+            local_offset = local_offset.repeat(env_cfg.scene.num_envs, 1)
+            
+            # B. Rotate this local offset into the world frame using the dog's orientation
+            world_offset = quat_apply(root_pose[:, 3:7], local_offset)
+            
+            # C. Add the rotated offset to the robot's world position
+            root_pose[:, :3] += world_offset
+            
+            # D. Write the teleport command directly to PhysX
+            arm.write_root_pose_to_sim(root_pose)
+            
+            # E. KILL MOMENTUM: Force the arm's velocity to zero so physics doesn't drag it
+            zero_vel = torch.zeros_like(robot.data.root_state_w[:, 7:13])
+            arm.write_root_velocity_to_sim(zero_vel)
+            # ---------------------------------------------
+
+            # --- 2. ROS 2 controls the Arm joints ---
+            if _ROS_NODE_REF is not None and getattr(_ROS_NODE_REF, 'arm_joint_targets', None) is not None:
+                arm_targets = np.tile(_ROS_NODE_REF.arm_joint_targets, (env_cfg.scene.num_envs, 1))
+                arm_targets_tensor = torch.tensor(arm_targets, device=env.unwrapped.device, dtype=torch.float32)
+                arm.set_joint_position_target(arm_targets_tensor)
+            # 1. RL Policy controls the Dog
             actions = policy(obs)
             obs, _, _, _ = env.step(actions)
             
