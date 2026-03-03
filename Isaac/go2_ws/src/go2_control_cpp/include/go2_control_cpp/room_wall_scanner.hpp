@@ -43,6 +43,14 @@ private:
     rclcpp::Time last_command_time_;
     double command_duration_sec_; // How long to stare at each wall
 
+    // Add these under the private: section
+    bool is_sweeping_ = false;
+    double current_arm_yaw_ = 0.0;
+    double target_arm_yaw_ = 0.0;
+    double start_arm_yaw_ = 0.0;
+    rclcpp::Time sweep_start_time_;
+    double sweep_duration_sec_ = 2.0; // How long it takes to swing the arm
+
     // Helper methods
     void calculateWallTargets(const TopologicalNode& room);
     bool getRobotPose(double& rx, double& ry, double& ryaw);

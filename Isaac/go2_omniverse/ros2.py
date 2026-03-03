@@ -162,21 +162,27 @@ def add_camera(num_envs, robot_type):
     _cameras_keep_alive = [] 
 
     for i in range(num_envs):
+        # Mount the camera to link06 (end-effector) of the Z1 arm
         cameraCfg = CameraCfg(
-            prim_path=f"/World/envs/env_{i}/Robot/base/front_cam",
+            prim_path=f"/World/envs/env_{i}/Arm/link06/front_cam",
             update_period=0.1,
-            height=512,
-            width=640,
+            # Standard RealSense resolution
+            height=480,
+            width=848,
             data_types=["rgb"],
             spawn=sim_utils.PinholeCameraCfg(
-                focal_length=13.0, 
+                # RealSense optics to achieve ~87° HFOV
+                focal_length=1.93, 
                 focus_distance=400.0, 
-                horizontal_aperture=7.68,
-                clipping_range=(0.1, 1.0e5)
+                horizontal_aperture=3.64,
+                # Lower near-clipping plane because arms get close to objects
+                clipping_range=(0.01, 1.0e5) 
             ),
-            offset=CameraCfg.OffsetCfg(pos=(0.0, 0.0, 0.42), rot=(0.5, -0.5, 0.5, -0.5), convention="ros"),
+            # Position offset so the camera sits slightly in front of the link's center
+            offset=CameraCfg.OffsetCfg(pos=(0.05, 0.0, 0.0), rot=(0.5, -0.5, 0.5, -0.5), convention="ros"),
         )
 
+        # (If using the g1 robot, you might want to bypass or update this condition)
         if robot_type == "g1":
             cameraCfg.prim_path = f"/World/envs/env_{i}/Robot/head_link/front_cam"
             cameraCfg.offset = CameraCfg.OffsetCfg(pos=(0.0, 0.0, 0.0), rot=(0.5, -0.5, 0.5, -0.5), convention="ros")
@@ -184,7 +190,8 @@ def add_camera(num_envs, robot_type):
         cam = Camera(cameraCfg)
         _cameras_keep_alive.append(cam)
 
-        render_prod = rep.create.render_product(cameraCfg.prim_path, (640, 512))
+        # Ensure the render product matches the new resolution
+        render_prod = rep.create.render_product(cameraCfg.prim_path, (848, 480))
         rgb_anno = rep.AnnotatorRegistry.get_annotator("rgb")
         rgb_anno.attach(render_prod)
         annotators.append(rgb_anno)
@@ -251,7 +258,8 @@ def pub_robo_data_ros2(robot_type, num_envs, base_node, env, annotator_lst, next
         final_rot = base_node.cam_current_rot * correction_rot
 
         for i in range(num_envs):
-            cam_prim_path = f"/World/envs/env_{i}/Robot/base/front_cam"
+            # Updated to target the new arm-mounted camera path
+            cam_prim_path = f"/World/envs/env_{i}/Arm/link06/front_cam"
             prim = stage.GetPrimAtPath(cam_prim_path)
             if prim.IsValid():
                 xform = UsdGeom.Xformable(prim)

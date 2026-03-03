@@ -645,6 +645,10 @@ def run_sim():
     arm = env.unwrapped.scene["arm"]
     ee_body_idx = arm.find_bodies("link06")[0][0] # Get the index of link06
 
+    # Add these trackers just before the while loop
+    current_rel_pos = torch.zeros((env_cfg.scene.num_envs, 3), device=env.unwrapped.device, dtype=torch.float32)
+    current_rel_rot = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=env.unwrapped.device, dtype=torch.float32).repeat(env_cfg.scene.num_envs, 1)
+
     # --- OPTIMIZATION VARIABLES ---
     ros_step_counter = 0
     ros_decimation = 1
@@ -685,25 +689,31 @@ def run_sim():
                 # A. Get the relative target pos/rot from ROS
                 rel_pos_np, rel_rot_np = _ROS_NODE_REF.arm_pose_target_rel
                 
-                # Convert to Tensors and repeat for all parallel environments
-                rel_pos = torch.tensor(rel_pos_np, device=env.unwrapped.device, dtype=torch.float32).repeat(env_cfg.scene.num_envs, 1)
-                rel_rot = torch.tensor(rel_rot_np, device=env.unwrapped.device, dtype=torch.float32).repeat(env_cfg.scene.num_envs, 1)
+                target_rel_pos = torch.tensor(rel_pos_np, device=env.unwrapped.device, dtype=torch.float32).repeat(env_cfg.scene.num_envs, 1)
+                target_rel_rot = torch.tensor(rel_rot_np, device=env.unwrapped.device, dtype=torch.float32).repeat(env_cfg.scene.num_envs, 1)
                 
-                # B. Convert Relative Target -> World Target
+                # B. SMOOTHING (Lerp the target so the arm moves fluidly)
+                alpha = 0.05  # Adjust this: Lower = slower/smoother, Higher = faster/snappier
+                current_rel_pos = current_rel_pos + alpha * (target_rel_pos - current_rel_pos)
+                
+                # Lerp quaternions and re-normalize
+                current_rel_rot = current_rel_rot + alpha * (target_rel_rot - current_rel_rot)
+                current_rel_rot = current_rel_rot / torch.norm(current_rel_rot, dim=-1, keepdim=True)
+                
+                # C. Convert Smoothed Relative Target -> World Target
                 robot_root_pos = robot.data.root_state_w[:, :3]
                 robot_root_quat = robot.data.root_state_w[:, 3:7]
                 
-                target_world_pos = robot_root_pos + quat_apply(robot_root_quat, rel_pos)
-                target_world_rot = quat_mul(robot_root_quat, rel_rot)
-                
-                # C. Set the Target Command for the IK Solver
-                # Orbit expects a single combined tensor [pos, quat] of shape (num_envs, 7)
-                target_pose_tensor = torch.cat([target_world_pos, target_world_rot], dim=-1)
-                diff_ik_controller.set_command(target_pose_tensor)
-                
-                # D. Get current arm state
+                target_world_pos = robot_root_pos + quat_apply(robot_root_quat, current_rel_pos)
+                target_world_rot = quat_mul(robot_root_quat, current_rel_rot)
+
+                # Add this right before diff_ik_controller.compute
                 ee_pos = arm.data.body_pos_w[:, ee_body_idx, :]
                 ee_quat = arm.data.body_quat_w[:, ee_body_idx, :]
+                
+                # D. Set the Target Command for the IK Solver
+                target_pose_tensor = torch.cat([target_world_pos, target_world_rot], dim=-1)
+                diff_ik_controller.set_command(target_pose_tensor)
                 
                 # 1. Fetch Jacobians directly from the PhysX view
                 physx_jacobians = arm.root_physx_view.get_jacobians()

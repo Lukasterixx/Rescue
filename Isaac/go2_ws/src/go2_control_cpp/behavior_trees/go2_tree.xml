@@ -6,13 +6,16 @@
       <Parallel failure_threshold="-1"
                 success_threshold="-1">
         <TopologicalMapperAction global_frame="odom"
-                                 robot_frame="livox_frame"
+                                 robot_frame="base_link"
                                  topological_tree="{room_tree}"/>
         <RoomExplorerAction topological_tree="{room_tree}"
                             global_frame="odom"
                             robot_frame="base_link"
                             action_name="go2_navigator"
                             goal_pose="{door_pos}"/>
+        <RoomWallScannerAction topological_tree="{room_tree}"
+                               global_frame="odom"
+                               robot_frame="base_link"/>
       </Parallel>
     </Nav2Ready>
   </BehaviorTree>
@@ -40,6 +43,17 @@
       <output_port name="goal_pose"
                    default="{door_pos}"
                    type="geometry_msgs::msg::PoseStamped"/>
+    </Action>
+    <Action ID="RoomWallScannerAction">
+      <input_port name="topological_tree"
+                  default="{room_tree}"
+                  type="std::shared_ptr&lt;TopologicalTree&gt;"/>
+      <input_port name="global_frame"
+                  default="odom"
+                  type="string"/>
+      <input_port name="robot_frame"
+                  default="base_link"
+                  type="string"/>
     </Action>
     <Action ID="TopologicalMapperAction">
       <input_port name="global_frame"

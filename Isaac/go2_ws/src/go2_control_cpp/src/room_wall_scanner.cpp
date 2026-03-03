@@ -10,7 +10,7 @@ namespace go2_control_cpp
 RoomWallScannerAction::RoomWallScannerAction(const std::string& name, const BT::NodeConfiguration& config)
     : BT::StatefulActionNode(name, config),
       current_room_id_(-1),
-      command_duration_sec_(3.0) // Wait 3 seconds per wall for the camera to settle
+      command_duration_sec_(2.0) // Wait 3 seconds per wall for the camera to settle
 {
     node_ = rclcpp::Node::make_shared("room_wall_scanner_node");
     
@@ -42,21 +42,27 @@ BT::PortsList RoomWallScannerAction::providedPorts()
 
 BT::NodeStatus RoomWallScannerAction::onStart()
 {
+    is_sweeping_ = false;
+    current_arm_yaw_ = 0.0; // Assume we start forward (or initialize this from joint states if you have them)
+    return BT::NodeStatus::RUNNING;
+}
+
+BT::NodeStatus RoomWallScannerAction::onRunning()
+{
     std::shared_ptr<TopologicalTree> tree;
     if (!getInput("topological_tree", tree) || !tree || tree->nodes.empty()) {
-        RCLCPP_WARN(node_->get_logger(), "No topological tree available.");
-        return BT::NodeStatus::FAILURE;
+        RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 2000, 
+            "Wall Scanner waiting: No topological tree available yet.");
+        return BT::NodeStatus::RUNNING; 
     }
 
     double rx, ry, ryaw;
     if (!getRobotPose(rx, ry, ryaw)) {
-        return BT::NodeStatus::FAILURE;
+        return BT::NodeStatus::RUNNING; 
     }
 
-    // Determine which room the robot is currently in
     cv::Point2f robot_pt(rx, ry);
     const TopologicalNode* current_room = nullptr;
-    
     for (const auto& node : tree->nodes) {
         if (!node.corners.empty() && cv::pointPolygonTest(node.corners, robot_pt, false) >= 0) {
             current_room = &node;
@@ -65,63 +71,79 @@ BT::NodeStatus RoomWallScannerAction::onStart()
     }
 
     if (!current_room) {
-        RCLCPP_WARN(node_->get_logger(), "Robot is not inside any mapped room boundaries.");
-        return BT::NodeStatus::FAILURE;
+        RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000, 
+            "Wall Scanner waiting: Robot is not inside any mapped room boundaries.");
+        return BT::NodeStatus::RUNNING;
     }
 
-    // If we entered a new room, recalculate targets
     if (current_room->id != current_room_id_) {
         current_room_id_ = current_room->id;
         calculateWallTargets(*current_room);
-        last_command_time_ = node_->get_clock()->now() - rclcpp::Duration::from_seconds(command_duration_sec_ + 1.0); // Force immediate execution
-    }
-
-    return BT::NodeStatus::RUNNING;
-}
-
-BT::NodeStatus RoomWallScannerAction::onRunning()
-{
-    if (target_wall_points_.empty()) {
-        RCLCPP_INFO(node_->get_logger(), "Finished scanning all walls in room %d.", current_room_id_);
-        return BT::NodeStatus::SUCCESS;
+        last_command_time_ = node_->get_clock()->now() - rclcpp::Duration::from_seconds(command_duration_sec_ + 1.0); 
+        is_sweeping_ = false;
     }
 
     auto now = node_->get_clock()->now();
+
+    // --- TRAJECTORY EXECUTION STATE ---
+    if (is_sweeping_) {
+        double elapsed = (now - sweep_start_time_).seconds();
+        
+        // Calculate progress (0.0 to 1.0)
+        double t = elapsed / sweep_duration_sec_;
+        if (t > 1.0) t = 1.0;
+
+        // Smooth step interpolation (cosine ease-in/ease-out) for softer starts and stops
+        double smooth_t = (1.0 - std::cos(t * M_PI)) / 2.0;
+
+        // Calculate the shortest angular distance
+        double angle_diff = target_arm_yaw_ - start_arm_yaw_;
+        angle_diff = std::atan2(std::sin(angle_diff), std::cos(angle_diff)); // Wrap to [-pi, pi]
+
+        current_arm_yaw_ = start_arm_yaw_ + (smooth_t * angle_diff);
+
+        // Publish the intermediate pose
+        geometry_msgs::msg::Pose arm_cmd;
+        double r = 0.30;
+        arm_cmd.position.x = r * std::cos(current_arm_yaw_);
+        arm_cmd.position.y = r * std::sin(current_arm_yaw_);
+        arm_cmd.position.z = 0.30;
+
+        tf2::Quaternion q;
+        q.setRPY(0.0, 0.0, current_arm_yaw_); // Enforce strict horizontal orientation constantly
+        arm_cmd.orientation = tf2::toMsg(q);
+
+        pub_arm_cmd_->publish(arm_cmd);
+
+        if (t >= 1.0) {
+            is_sweeping_ = false; // Sweep finished, start the "stare" timer
+            last_command_time_ = now;
+            RCLCPP_INFO(node_->get_logger(), "Arm arrived at wall target.");
+        }
+        
+        return BT::NodeStatus::RUNNING;
+    }
+
+    // --- IDLE / NEXT TARGET STATE ---
+    if (target_wall_points_.empty()) {
+        return BT::NodeStatus::RUNNING; 
+    }
+
     if ((now - last_command_time_).seconds() >= command_duration_sec_) {
-        // Pop the next target
         cv::Point2f target_pt = target_wall_points_.back();
         target_wall_points_.pop_back();
 
-        double rx, ry, ryaw;
-        if (getRobotPose(rx, ry, ryaw)) {
-            // Calculate global angle from robot to the wall point
-            double global_yaw = std::atan2(target_pt.y - ry, target_pt.x - rx);
-            
-            // Calculate relative yaw for the arm (assuming arm base is aligned with robot base_link)
-            double local_yaw = global_yaw - ryaw;
-            
-            // Wrap to [-pi, pi]
-            local_yaw = std::atan2(std::sin(local_yaw), std::cos(local_yaw));
+        double global_yaw = std::atan2(target_pt.y - ry, target_pt.x - rx);
+        double local_yaw = global_yaw - ryaw;
+        local_yaw = std::atan2(std::sin(local_yaw), std::cos(local_yaw));
 
-            // Construct and publish the arm command pose
-            geometry_msgs::msg::Pose arm_cmd;
-            
-            // Requirements: Z=0.2, distance >= 0.15 relative to arm base (0,0,0)
-            double r = 0.15;
-            arm_cmd.position.x = r * std::cos(local_yaw);
-            arm_cmd.position.y = r * std::sin(local_yaw);
-            arm_cmd.position.z = 0.2;
-
-            // Pitch=0, Roll=0, horizontal to ground plane
-            tf2::Quaternion q;
-            q.setRPY(0.0, 0.0, local_yaw);
-            arm_cmd.orientation = tf2::toMsg(q);
-
-            pub_arm_cmd_->publish(arm_cmd);
-            last_command_time_ = now;
-            
-            RCLCPP_INFO(node_->get_logger(), "Commanding arm to face wall at local yaw: %.2f", local_yaw);
-        }
+        // Setup the sweep trajectory parameters
+        start_arm_yaw_ = current_arm_yaw_;
+        target_arm_yaw_ = local_yaw;
+        sweep_start_time_ = now;
+        is_sweeping_ = true;
+        
+        RCLCPP_INFO(node_->get_logger(), "Initiating sweep from %.2f to %.2f", start_arm_yaw_, target_arm_yaw_);
     }
 
     return BT::NodeStatus::RUNNING;
