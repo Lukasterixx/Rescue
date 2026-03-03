@@ -34,6 +34,7 @@ from PIL import Image
 import datetime
 import os
 from ament_index_python.packages import get_package_share_directory
+from geometry_msgs.msg import Pose
 
 DISABLE_RING_AND_TIME = True    # fast mode
 
@@ -338,10 +339,9 @@ class RobotBaseNode(Node):
         self._last_lin_vel_b = np.zeros((num_envs, 3), dtype=float)
         self._last_time_ns = None
 
-        # --- NEW: Arm Command Subscriber ---
-        from sensor_msgs.msg import JointState
-        self.arm_joint_targets = None
-        self.create_subscription(JointState, '/arm_commands', self._arm_cmd_cb, 10)
+        # --- MODIFIED: Arm Command Subscriber (Now expects Pose) ---
+        self.arm_pose_target = None
+        self.create_subscription(Pose, '/arm_commands', self._arm_cmd_cb, 10)
 
         # --- NEW: Return to Base Publisher ---
         self.return_pub = self.create_publisher(Empty, '/return_to_base', 10)
@@ -405,10 +405,17 @@ class RobotBaseNode(Node):
         self._publish_static_map_odom()
     
     def _arm_cmd_cb(self, msg):
-        """Stores incoming ROS 2 joint targets for the arm."""
+        """Stores incoming ROS 2 Cartesian pose targets for the arm (relative to base)."""
         import numpy as np
-        # Convert the incoming ROS positions into a numpy array
-        self.arm_joint_targets = np.array(msg.position, dtype=np.float32)
+        # Extract relative position (x, y, z)
+        pos = np.array([msg.position.x, msg.position.y, msg.position.z], dtype=np.float32)
+        # Extract relative orientation as quaternion (w, x, y, z)
+        rot = np.array([msg.orientation.w, msg.orientation.x, msg.orientation.y, msg.orientation.z], dtype=np.float32)
+        
+        self.arm_pose_target_rel = (pos, rot)
+        
+        # --- NEW: Print to console so we know the message arrived ---
+        self.get_logger().info(f"Arm IK Target Received: x={pos[0]:.2f}, y={pos[1]:.2f}, z={pos[2]:.2f}")
 
     # --- NEW: Helper method to publish the static transform ---
     def _publish_static_map_odom(self):

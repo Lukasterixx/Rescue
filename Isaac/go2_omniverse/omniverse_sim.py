@@ -52,7 +52,7 @@ from rsl_rl.runners import OnPolicyRunner
 # Enable required extensions BEFORE importing ros2.py (fixes omni.isaac.sensor import)
 ext_manager = omni.kit.app.get_app().get_extension_manager()
 ext_manager.set_extension_enabled_immediate("omni.isaac.ros2_bridge", True)
-for _ext in ["omni.isaac.sensor", "omni.isaac.sensors", "omni.isaac.range_sensor"]:
+for _ext in ["omni.isaac.sensor", "omni.isaac.range_sensor"]:
     try:
         ext_manager.set_extension_enabled_immediate(_ext, True)
     except Exception:
@@ -102,6 +102,9 @@ import omni.isaac.core.utils.prims as prim_utils
 import numpy as np
 
 import os
+
+from omni.isaac.orbit.controllers import DifferentialIKController, DifferentialIKControllerCfg
+from omni.isaac.orbit.utils.math import quat_apply, quat_mul
 
 def generate_arm_usd():
     """Converts the URDF to a USD file and returns the path."""
@@ -631,6 +634,17 @@ def run_sim():
 
     save_vis_checkpoint()
 
+    # Setup the IK Controller
+    diff_ik_cfg = DifferentialIKControllerCfg(
+        command_type="pose",
+        ik_method="dls", # Damped Least Squares is highly stable
+    )
+    diff_ik_controller = DifferentialIKController(diff_ik_cfg, num_envs=env_cfg.scene.num_envs, device=env.unwrapped.device)
+
+    # Find the body index for the end-effector ("link06") 
+    arm = env.unwrapped.scene["arm"]
+    ee_body_idx = arm.find_bodies("link06")[0][0] # Get the index of link06
+
     # --- OPTIMIZATION VARIABLES ---
     ros_step_counter = 0
     ros_decimation = 1
@@ -665,11 +679,59 @@ def run_sim():
             arm.write_root_velocity_to_sim(zero_vel)
             # ---------------------------------------------
 
-            # --- 2. ROS 2 controls the Arm joints ---
-            if _ROS_NODE_REF is not None and getattr(_ROS_NODE_REF, 'arm_joint_targets', None) is not None:
-                arm_targets = np.tile(_ROS_NODE_REF.arm_joint_targets, (env_cfg.scene.num_envs, 1))
-                arm_targets_tensor = torch.tensor(arm_targets, device=env.unwrapped.device, dtype=torch.float32)
-                arm.set_joint_position_target(arm_targets_tensor)
+            # --- 2. ROS 2 controls the Arm joints via Inverse Kinematics ---
+            if _ROS_NODE_REF is not None and getattr(_ROS_NODE_REF, 'arm_pose_target_rel', None) is not None:
+                
+                # A. Get the relative target pos/rot from ROS
+                rel_pos_np, rel_rot_np = _ROS_NODE_REF.arm_pose_target_rel
+                
+                # Convert to Tensors and repeat for all parallel environments
+                rel_pos = torch.tensor(rel_pos_np, device=env.unwrapped.device, dtype=torch.float32).repeat(env_cfg.scene.num_envs, 1)
+                rel_rot = torch.tensor(rel_rot_np, device=env.unwrapped.device, dtype=torch.float32).repeat(env_cfg.scene.num_envs, 1)
+                
+                # B. Convert Relative Target -> World Target
+                robot_root_pos = robot.data.root_state_w[:, :3]
+                robot_root_quat = robot.data.root_state_w[:, 3:7]
+                
+                target_world_pos = robot_root_pos + quat_apply(robot_root_quat, rel_pos)
+                target_world_rot = quat_mul(robot_root_quat, rel_rot)
+                
+                # C. Set the Target Command for the IK Solver
+                # Orbit expects a single combined tensor [pos, quat] of shape (num_envs, 7)
+                target_pose_tensor = torch.cat([target_world_pos, target_world_rot], dim=-1)
+                diff_ik_controller.set_command(target_pose_tensor)
+                
+                # D. Get current arm state
+                ee_pos = arm.data.body_pos_w[:, ee_body_idx, :]
+                ee_quat = arm.data.body_quat_w[:, ee_body_idx, :]
+                
+                # 1. Fetch Jacobians directly from the PhysX view
+                physx_jacobians = arm.root_physx_view.get_jacobians()
+                
+                # 2. PhysX drops the root body from the Jacobian list if the base is fixed. 
+                # We dynamically adjust the index just in case.
+                ee_jacobi_idx = ee_body_idx - 1 if arm.is_fixed_base else ee_body_idx
+                jacobian = physx_jacobians[:, ee_jacobi_idx, :, :]
+                
+                # 3. If the arm is a floating base, the first 6 columns belong to the root body 
+                # (Tx, Ty, Tz, Rx, Ry, Rz). We slice them out because we only want to move the joints.
+                if not arm.is_fixed_base:
+                    jacobian = jacobian[:, :, 6:]
+                
+                current_joint_pos = arm.data.joint_pos
+                
+                # E. Compute required joint targets using IK
+                ik_joint_targets = diff_ik_controller.compute(
+                    ee_pos=ee_pos,
+                    ee_quat=ee_quat,
+                    jacobian=jacobian,
+                    joint_pos=current_joint_pos
+                )
+                
+                # F. Apply the calculated joint targets to the physics engine
+                arm.set_joint_position_target(ik_joint_targets)
+
+
             # 1. RL Policy controls the Dog
             actions = policy(obs)
             obs, _, _, _ = env.step(actions)
