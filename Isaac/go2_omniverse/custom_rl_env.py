@@ -121,8 +121,8 @@ class MySceneCfg(InteractiveSceneCfg):
 @configclass
 class ViewerCfg:
     # 1. ATTACH CAMERA TO ROBOT
-    # "asset_root" tracks the root of the asset specified in asset_name
-    origin_type: Literal["world", "env", "asset_root"] = "asset_root"
+    # Change this to "world" to stop Orbit's default translation-only tracking
+    origin_type: Literal["world", "env", "asset_root"] = "world"
     asset_name: str | None = "robot" 
     env_index: int = 0
     

@@ -96,6 +96,17 @@ _ENV_REF = None
 # --- NEW: Reference to ROS node for resetting odom ---
 _ROS_NODE_REF = None
 
+# ===================== Arm Teleoperation State =====================
+ARM_TELEOP_ACTIVE = False
+# Starting default position (x, y, z) slightly forward and up relative to the base
+ARM_TELEOP_POS = [0.3, 0.0, 0.2] 
+# Default rotation (w, x, y, z) - facing forward
+ARM_TELEOP_ROT = [1.0, 0.0, 0.0, 0.0]
+# Track the current yaw angle independently
+ARM_TELEOP_YAW = 0.0
+
+from omni.isaac.core.utils.viewports import set_camera_view
+
 from omni.isaac.core.articulations import ArticulationView
 import omni.isaac.core.utils.prims as prim_utils
 
@@ -417,41 +428,85 @@ def _arrow_dir_pressed(dir_name: str):
 
 # ===================== Keyboard Handling =====================
 def sub_keyboard_event(event, *args, **kwargs) -> bool:
-    speed = 1.0  # existing teleop speed (kept for your WASD mapping)
+    # Add ARM_TELEOP_YAW to the globals list here
+    global ARM_TELEOP_ACTIVE, ARM_TELEOP_POS, ARM_TELEOP_ROT, ARM_TELEOP_YAW 
+    speed = 1.0 
 
     if event.type in (carb.input.KeyboardEventType.KEY_PRESS, carb.input.KeyboardEventType.KEY_REPEAT):
-        # -------- Arrow keys: visual slide with accelerating step (in meters) ----------
+        # -------- Arrow keys & 1/0: Z1 Arm Teleoperation ----------
+        is_arm_key = False
+        arm_step = 0.02 # Meters to move per keypress
+        target_yaw = None
+        
         if event.input.name == 'UP':
-            step = _arrow_dir_pressed('UP')
-            nudge_warehouse(dx=+step)         # robot appears to move +X
-        if event.input.name == 'DOWN':
-            step = _arrow_dir_pressed('DOWN')
-            nudge_warehouse(dx=-step)         # robot appears to move -X
-        if event.input.name == 'RIGHT':
-            step = _arrow_dir_pressed('RIGHT')
-            nudge_warehouse(dz=-step)         # robot appears to move +Y
-        if event.input.name == 'LEFT':
-            step = _arrow_dir_pressed('LEFT')
-            nudge_warehouse(dz=+step)         # robot appears to move -Y
+            ARM_TELEOP_POS[0] += arm_step
+            target_yaw = 0.0
+            is_arm_key = True
+        elif event.input.name == 'DOWN':
+            ARM_TELEOP_POS[0] -= arm_step
+            target_yaw = np.pi
+            is_arm_key = True
+        elif event.input.name == 'LEFT':
+            ARM_TELEOP_POS[1] += arm_step
+            target_yaw = np.pi / 2.0
+            is_arm_key = True
+        elif event.input.name == 'RIGHT':
+            ARM_TELEOP_POS[1] -= arm_step
+            target_yaw = -np.pi / 2.0
+            is_arm_key = True
+        elif event.input.name in ['1', 'NUMPAD_1']:
+            ARM_TELEOP_POS[2] += arm_step
+            is_arm_key = True
+        elif event.input.name in ['0', 'NUMPAD_0']:
+            ARM_TELEOP_POS[2] -= arm_step
+            is_arm_key = True
+            
+        if is_arm_key:
+            ARM_TELEOP_ACTIVE = True
+            
+            # --- UPDATE YAW (LINEAR DAMPENING) ---
+            if target_yaw is not None:
+                # Find the shortest angular distance to the target direction
+                diff = (target_yaw - ARM_TELEOP_YAW + np.pi) % (2 * np.pi) - np.pi
+                
+                # Proportional gain: Determines how aggressively it slows down.
+                # A value of 0.08 means the step covers 8% of the remaining distance per frame.
+                p_gain = 0.08 
+                max_step_rad = np.radians(10.0) # Hard cap at 10 degrees per frame so the base joint can keep up
+                
+                # Calculate the linear step size and clamp it to our safe maximum
+                step_rad = np.clip(diff * p_gain, -max_step_rad, max_step_rad)
+                
+                # Apply the dampened step
+                ARM_TELEOP_YAW += step_rad
+                    
+                # Convert the incrementally updated yaw back to a quaternion
+                ARM_TELEOP_ROT[0] = float(np.cos(ARM_TELEOP_YAW / 2.0)) # w
+                ARM_TELEOP_ROT[1] = 0.0                                 # x 
+                ARM_TELEOP_ROT[2] = 0.0                                 # y 
+                ARM_TELEOP_ROT[3] = float(np.sin(ARM_TELEOP_YAW / 2.0)) # z
+                
+            # --- SAFEGUARDS ---
+            # 1. Floor & Robot Body Z-limit (Don't dig into the dog)
+            if ARM_TELEOP_POS[2] < 0.05:
+                ARM_TELEOP_POS[2] = 0.05
+                
+            # 2. Prevent colliding with its own base (Bounding Box around origin)
+            if -0.15 < ARM_TELEOP_POS[0] < 0.15 and -0.15 < ARM_TELEOP_POS[1] < 0.15:
+                if ARM_TELEOP_POS[2] < 0.2:
+                    ARM_TELEOP_POS[2] = 0.2
+                    
+            # 3. Max reach (Prevent IK singularities / stretching beyond hardware limits)
+            dist = np.sqrt(ARM_TELEOP_POS[0]**2 + ARM_TELEOP_POS[1]**2 + ARM_TELEOP_POS[2]**2)
+            max_reach = 0.6
+            if dist > max_reach:
+                ARM_TELEOP_POS[0] *= (max_reach / dist)
+                ARM_TELEOP_POS[1] *= (max_reach / dist)
+                ARM_TELEOP_POS[2] *= (max_reach / dist)
 
-         # -------- Panel Rotation Hotkeys (M / N) ----------
-        if event.input.name == 'M':
-            # Rotate Positive X
-            rotate_panels_local_x(1)
-        if event.input.name == 'N':
-            # Rotate Negative X
-            rotate_panels_local_x(-1)
-
-        # -------- Checkpoint hotkeys ----------
-        if event.input.name == 'C':
-            save_vis_checkpoint()
-        if event.input.name == 'R':
-            load_vis_checkpoint()
-
-        # --- NEW: Return to Base Hotkey ---
-        if event.input.name == 'B':
-            if _ROS_NODE_REF is not None:
-                _ROS_NODE_REF.trigger_return_to_base()
+            # --- DEBUG: Print the bounded target position AND yaw ---
+            yaw_deg = np.degrees(ARM_TELEOP_YAW)
+            print(f"[TELEOP DEBUG] Arm Target: X={ARM_TELEOP_POS[0]:.3f}, Y={ARM_TELEOP_POS[1]:.3f}, Z={ARM_TELEOP_POS[2]:.3f} | Yaw: {yaw_deg:.1f}°")
 
         # -------- Keep your WASD/QE teleop ----------
         if len(custom_rl_env.base_command) > 0:
@@ -653,6 +708,13 @@ def run_sim():
     ros_step_counter = 0
     ros_decimation = 1
     next_deadline = time.monotonic() + 0.1
+
+    # Initialize the camera's smoothed yaw to the robot's starting orientation
+    init_quat = env.unwrapped.scene["robot"].data.root_state_w[0, 3:7]
+    camera_smooth_yaw = torch.atan2(
+        2.0 * (init_quat[0] * init_quat[3] + init_quat[1] * init_quat[2]), 
+        1.0 - 2.0 * (init_quat[2] * init_quat[2] + init_quat[3] * init_quat[3])
+    ).clone()
     
     while simulation_app.is_running():
 
@@ -683,14 +745,24 @@ def run_sim():
             arm.write_root_velocity_to_sim(zero_vel)
             # ---------------------------------------------
 
-            # --- 2. ROS 2 controls the Arm joints via Inverse Kinematics ---
-            if _ROS_NODE_REF is not None and getattr(_ROS_NODE_REF, 'arm_pose_target_rel', None) is not None:
+            # --- 2. Teleop OR ROS 2 controls the Arm joints via Inverse Kinematics ---
+            target_pos_np = None
+            target_rot_np = None
+
+            # Prioritize keyboard teleoperation if it has been activated
+            if ARM_TELEOP_ACTIVE:
+                target_pos_np = np.array(ARM_TELEOP_POS, dtype=np.float32)
+                target_rot_np = np.array(ARM_TELEOP_ROT, dtype=np.float32)
+            # Fall back to ROS 2 topic commands
+            elif _ROS_NODE_REF is not None and getattr(_ROS_NODE_REF, 'arm_pose_target_rel', None) is not None:
+                target_pos_np, target_rot_np = _ROS_NODE_REF.arm_pose_target_rel
+
+            # Only run the IK solver if we have a valid target
+            if target_pos_np is not None and target_rot_np is not None:
                 
-                # A. Get the relative target pos/rot from ROS
-                rel_pos_np, rel_rot_np = _ROS_NODE_REF.arm_pose_target_rel
-                
-                target_rel_pos = torch.tensor(rel_pos_np, device=env.unwrapped.device, dtype=torch.float32).repeat(env_cfg.scene.num_envs, 1)
-                target_rel_rot = torch.tensor(rel_rot_np, device=env.unwrapped.device, dtype=torch.float32).repeat(env_cfg.scene.num_envs, 1)
+                # A. Prepare the relative target pos/rot 
+                target_rel_pos = torch.tensor(target_pos_np, device=env.unwrapped.device, dtype=torch.float32).repeat(env_cfg.scene.num_envs, 1)
+                target_rel_rot = torch.tensor(target_rot_np, device=env.unwrapped.device, dtype=torch.float32).repeat(env_cfg.scene.num_envs, 1)
                 
                 # B. SMOOTHING (Lerp the target so the arm moves fluidly)
                 alpha = 0.05  # Adjust this: Lower = slower/smoother, Higher = faster/snappier
@@ -707,7 +779,7 @@ def run_sim():
                 target_world_pos = robot_root_pos + quat_apply(robot_root_quat, current_rel_pos)
                 target_world_rot = quat_mul(robot_root_quat, current_rel_rot)
 
-                # Add this right before diff_ik_controller.compute
+                # Fetch current EE state before diff_ik_controller.compute
                 ee_pos = arm.data.body_pos_w[:, ee_body_idx, :]
                 ee_quat = arm.data.body_quat_w[:, ee_body_idx, :]
                 
@@ -718,13 +790,11 @@ def run_sim():
                 # 1. Fetch Jacobians directly from the PhysX view
                 physx_jacobians = arm.root_physx_view.get_jacobians()
                 
-                # 2. PhysX drops the root body from the Jacobian list if the base is fixed. 
-                # We dynamically adjust the index just in case.
+                # 2. Adjust Jacobian index based on base fix status
                 ee_jacobi_idx = ee_body_idx - 1 if arm.is_fixed_base else ee_body_idx
                 jacobian = physx_jacobians[:, ee_jacobi_idx, :, :]
                 
-                # 3. If the arm is a floating base, the first 6 columns belong to the root body 
-                # (Tx, Ty, Tz, Rx, Ry, Rz). We slice them out because we only want to move the joints.
+                # 3. Slice out root body columns if floating base
                 if not arm.is_fixed_base:
                     jacobian = jacobian[:, :, 6:]
                 
@@ -745,6 +815,54 @@ def run_sim():
             # 1. RL Policy controls the Dog
             actions = policy(obs)
             obs, _, _, _ = env.step(actions)
+
+            # --- 3. Video Game Camera Follow (Velocity Yaw Tracking) ---
+            # Get the first robot's position and orientation
+            base_pos = robot.data.root_state_w[0, :3]
+            base_quat = robot.data.root_state_w[0, 3:7] # [w, x, y, z]
+
+            # Grab the world linear velocity of the robot
+            lin_vel_w = robot.data.root_lin_vel_w[0, :3]
+            vx, vy = lin_vel_w[0], lin_vel_w[1]
+            
+            # Calculate the current ground speed
+            speed = torch.sqrt(vx*vx + vy*vy)
+            
+            # If the robot is moving fast enough, target the direction of travel.
+            # If it stops, smoothly drift the camera back to the robot's physical forward facing direction.
+            if speed > 0.2:
+                target_cam_yaw = torch.atan2(vy, vx)
+            else:
+                w, x, y, z = base_quat[0], base_quat[1], base_quat[2], base_quat[3]
+                target_cam_yaw = torch.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+            
+            # Calculate shortest angular distance between current camera yaw and target yaw
+            pi_tensor = torch.tensor(np.pi, device=env.unwrapped.device)
+            diff = (target_cam_yaw - camera_smooth_yaw + pi_tensor) % (2 * pi_tensor) - pi_tensor
+            
+            # Apply EMA smoothing. 
+            # A value of 0.02 to 0.05 gives a great "heavy/smooth" ~1 second tracking delay.
+            alpha_cam = 0.03 
+            camera_smooth_yaw += diff * alpha_cam
+            
+            # Create a yaw-only quaternion from our smoothed angle
+            yaw_quat = torch.tensor([
+                [torch.cos(camera_smooth_yaw / 2.0), 0.0, 0.0, torch.sin(camera_smooth_yaw / 2.0)]
+            ], device=env.unwrapped.device)
+            
+            # Define camera offsets (Upper Behind)
+            local_eye = torch.tensor([[-2.0, 0.0, 1.5]], device=env.unwrapped.device)
+            local_lookat = torch.tensor([[1.0, 0.0, 0.0]], device=env.unwrapped.device) 
+            
+            # Rotate offsets by the smoothed yaw and add to dog's global position
+            world_eye = base_pos + quat_apply(yaw_quat, local_eye)[0]
+            world_lookat = base_pos + quat_apply(yaw_quat, local_lookat)[0]
+
+            # Update the Omniverse viewport camera
+            set_camera_view(
+                eye=world_eye.cpu().numpy(),
+                target=world_lookat.cpu().numpy()
+            )
             
             # --- OPTIMIZED ROS PUBLISHING ---
             ros_step_counter += 1

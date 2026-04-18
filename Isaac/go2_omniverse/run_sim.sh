@@ -21,7 +21,6 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-
 source /opt/ros/${ROS_DISTRO}/setup.bash
 cd IsaacSim-ros_workspaces/${ROS_DISTRO}_ws
 rosdep install --from-paths src --ignore-src -r -y
@@ -37,19 +36,19 @@ cd ..
 eval "$(conda shell.bash hook)"
 conda activate orbit
 export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libstdc++.so.6
-export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/lukas/isaacsim/kit
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$HOME/isaacsim/kit
 
 # NEW: Ensure Lidar Config Directory exists and copy the Unitree L1 config
 # This uses mkdir -p to avoid errors if the dir exists, and cp overwrites by default.
-mkdir -p /home/lukas/IsaacLab/source/exts/omni.isaac.sensor/data/lidar_configs
-cp /home/lukas/Rescue/Isaac/go2_omniverse/Isaac_sim/Unitree/Unitree_L1.json /home/lukas/IsaacLab/source/exts/omni.isaac.sensor/data/lidar_configs/
+mkdir -p $HOME/IsaacLab/source/exts/omni.isaac.sensor/data/lidar_configs
+cp $HOME/Rescue/Isaac/go2_omniverse/Isaac_sim/Unitree/Unitree_L1.json $HOME/IsaacLab/source/exts/omni.isaac.sensor/data/lidar_configs/
 
 # NEW: Set Isaac Sim paths
-export ISAAC_PATH=/home/lukas/isaacsim
+export ISAAC_PATH=$HOME/isaacsim
 export EXP_PATH=$ISAAC_PATH/apps/omni.isaac.sim.python.kit
 export CARB_APP_PATH=$ISAAC_PATH/kit
 
-export ORBIT_PATH=/home/lukas/IsaacLab
+export ORBIT_PATH=$HOME/IsaacLab
 
 # Run the Python script
 python main.py --robot_amount 1 --robot go2 --terrain rough --custom_env maze
