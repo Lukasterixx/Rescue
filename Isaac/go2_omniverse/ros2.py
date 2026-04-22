@@ -291,6 +291,18 @@ def pub_robo_data_ros2(robot_type, num_envs, base_node, env, annotator_lst, next
             time_now_for_clock
         )
 
+        # --- NEW: Extract Arm End-Effector Pose and Publish TF ---
+        arm = env.env.scene["arm"]
+        if not hasattr(base_node, 'ee_body_idx'):
+            # Cache the index so we don't search strings every frame
+            base_node.ee_body_idx = arm.find_bodies("link06")[0][0]
+            
+        ee_pos = arm.data.body_pos_w[i, base_node.ee_body_idx, :]
+        ee_quat = arm.data.body_quat_w[i, base_node.ee_body_idx, :]
+        
+        base_node.publish_ee_tf(ee_pos, ee_quat, i, time_now_for_clock)
+        # ---------------------------------------------------------
+
     # ---------- 10 Hz LiDAR gate ----------
     period = 0.1  
     now = time.monotonic()
@@ -411,6 +423,62 @@ class RobotBaseNode(Node):
         self.static_broadcaster = StaticTransformBroadcaster(self)
 
         self._publish_static_map_odom()
+
+    def publish_ee_tf(self, ee_pos, ee_rot, robot_num, time_now):
+        """Publishes the odom -> arm_camera_link transform."""
+        # Convert Isaac tensors to numpy arrays
+        current_pos = np.array([ee_pos[0].item(), ee_pos[1].item(), ee_pos[2].item()])
+        
+        # Scipy expects [x, y, z, w], Isaac gives [w, x, y, z]
+        current_rot = Rotation.from_quat([ee_rot[1].item(), ee_rot[2].item(), ee_rot[3].item(), ee_rot[0].item()])
+
+        # Apply the same reset logic used by the base odometry
+        if robot_num in self.odom_origins:
+            origin = self.odom_origins[robot_num]
+            
+            # 1. Rotation difference relative to origin
+            R_rel = origin['rot'].inv() * current_rot
+            
+            # 2. Translation difference relative to origin
+            P_diff = current_pos - origin['pos']
+            P_rel = origin['rot'].inv().apply(P_diff)
+            
+            final_pos = P_rel
+            final_quat = R_rel.as_quat() # returns [x, y, z, w]
+            
+            px, py, pz = final_pos[0], final_pos[1], final_pos[2]
+            qx, qy, qz, qw = final_quat[0], final_quat[1], final_quat[2], final_quat[3]
+        else:
+            # Fallback if no reset occurred
+            px, py, pz = current_pos[0], current_pos[1], current_pos[2]
+            qw, qx, qy, qz = ee_rot[0].item(), ee_rot[1].item(), ee_rot[2].item(), ee_rot[3].item()
+
+        # Apply the Accumulated Nudge mapping offset
+        px += self.accumulated_nudge[0]
+        py += self.accumulated_nudge[1]
+        pz += self.accumulated_nudge[2]
+
+        # Construct and publish the TF
+        ee_trans = TransformStamped()
+        ee_trans.header.stamp = time_now
+        ee_trans.header.frame_id = "odom"
+        
+        # Suffix frame name if simulating multiple robots
+        if self.num_envs > 1:
+            ee_trans.child_frame_id = f"arm_camera_link_{robot_num}"
+        else:
+            ee_trans.child_frame_id = "arm_camera_link"
+            
+        ee_trans.transform.translation.x = float(px)
+        ee_trans.transform.translation.y = float(py)
+        ee_trans.transform.translation.z = float(pz)
+        
+        ee_trans.transform.rotation.x = float(qx)
+        ee_trans.transform.rotation.y = float(qy)
+        ee_trans.transform.rotation.z = float(qz)
+        ee_trans.transform.rotation.w = float(qw)
+        
+        self.broadcaster.sendTransform(ee_trans)
     
     def _arm_cmd_cb(self, msg):
         """Stores incoming ROS 2 Cartesian pose targets for the arm (relative to base)."""
