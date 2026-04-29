@@ -6,217 +6,230 @@
 
 Welcome to the Rescue Repo, here you will find the source code for the autonomous SLAM quadruped first simulated on Isaac Sim with ros2 and then deployed on a Unitree Go2 EDU
 
-## Requirements
-1. Nvidia RTX 20 series or newer (4070/4080 tested)
-2. Minimum 100gb of storage on Ubunutu 22.04
-3. Ros2 Humble
-4. IsaacSim 4.1
-5. IsaacLab 0.3.1 (orbit)
+# SIM Installation Guide
 
+This guide installs:
 
-## SIM Installation Guide
+- Ubuntu 22.04 native Linux
+- ROS 2 Humble
+- Miniconda
+- Isaac Sim 5.1 from pip
+- Latest Isaac Lab from source
+- Unitree ROS 2 SDK
+- Rescue ROS 2 workspace dependencies
 
-**Step I:** Install Ubuntu 22.04 Native Install (docker untested)
+This guide replaces the old Isaac Sim 4.1 / Orbit / Isaac Lab 0.3.1 installation flow. Do **not** install Omniverse Launcher or download the old archive build unless you specifically want the binary install method.
 
-**Step I.I:** Install Omniverse: https://developer.nvidia.com/omniverse?sortBy=developer_learning_library%2Fsort%2Ffeatured_in.omniverse%3Adesc%2Ctitle%3Aasc&hitsPerPage=6#section-getting-started
+---
 
-**Step II:** Install Ros2 Humble following this link: https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debs.html
+## 0. Assumptions
 
-Add source `/opt/ros/humble/setup.bash` to your `~/.bashrc` to source ros2 in each terminal
+This guide assumes:
 
-**Step III:** Install MiniConda
+- You are on Ubuntu 22.04 native install.
+- You have a supported NVIDIA GPU and recent NVIDIA driver installed.
+- You want ROS 2 Humble for your external ROS stack.
+- Isaac Sim will be installed into a Miniconda environment using pip.
+- Isaac Sim 5.1 uses Python 3.11.
+- ROS 2 Humble from apt uses Python 3.10, which is normal.
+
+Check GLIBC before continuing:
+
+```bash
+ldd --version
 ```
+
+Ubuntu 22.04 should report GLIBC 2.35, which is suitable for Isaac Sim 5.1 pip packages.
+
+---
+
+## 1. Install Ubuntu 22.04 Native
+
+Use a native Ubuntu 22.04 install for this workflow.
+
+Docker is not covered by this guide.
+
+---
+
+## 2. Install ROS 2 Humble
+
+Follow the official ROS 2 Humble debian package install:
+
+https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debs.html
+
+After installing ROS 2 Humble, add this to `~/.bashrc`:
+
+```bash
+source /opt/ros/humble/setup.bash
+```
+
+Then reload your shell:
+
+```bash
+source ~/.bashrc
+```
+
+Install common ROS 2 build tools:
+
+```bash
+sudo apt update
+sudo apt install -y \
+  python3-colcon-common-extensions \
+  python3-rosdep \
+  python3-vcstool \
+  build-essential \
+  cmake \
+  git
+```
+
+Initialize rosdep:
+
+```bash
+sudo rosdep init || true
+rosdep update
+```
+
+---
+
+## 3. Install Miniconda
+
+```bash
 mkdir -p ~/miniconda3
 wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O ~/miniconda3/miniconda.sh
 bash ~/miniconda3/miniconda.sh -b -u -p ~/miniconda3
 rm ~/miniconda3/miniconda.sh
+
 source ~/miniconda3/bin/activate
 conda init --all
 conda config --set auto_activate_base false
 ```
-**Step IV:** Install Isaac-sim 4.1 and IsaacLab 0.3.1
-Download the archive version 4.1 from https://docs.isaacsim.omniverse.nvidia.com/4.5.0/installation/download.html
-Extract it to your home directory `~/isaacsim`
+
+Close and reopen the terminal, or run:
+
+```bash
+source ~/.bashrc
 ```
+
+---
+
+## 4. Create Isaac Lab Conda Environment
+
+Isaac Sim 5.1 requires Python 3.11, so create the environment with Python 3.11.
+
+```bash
+conda create -n env_isaaclab python=3.11 -y
+conda activate env_isaaclab
+
+python -m pip install --upgrade pip setuptools wheel
+```
+
+Optional but useful:
+
+```bash
+pip install toml pyyaml pydot gitpython hydra-core omegaconf tensorboard
+```
+
+---
+
+## 5. Install Isaac Sim 5.1 with pip
+
+Make sure the `env_isaaclab` environment is active:
+
+```bash
+conda activate env_isaaclab
+```
+
+Install Isaac Sim 5.1:
+
+```bash
+pip install "isaacsim[all,extscache]==5.1.0" --extra-index-url https://pypi.nvidia.com
+```
+
+Install the PyTorch version recommended by the current Isaac Lab pip-install guide for x86_64 Linux:
+
+```bash
+pip install -U torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu128
+```
+
+Verify Isaac Sim starts:
+
+```bash
+isaacsim
+```
+
+On first launch, accept the NVIDIA Omniverse EULA when prompted.
+
+You can also launch the full experience directly:
+
+```bash
+isaacsim isaacsim.exp.full.kit
+```
+
+---
+
+## 6. Install Latest Isaac Lab from Source
+
+Clone Isaac Lab:
+
+```bash
+cd ~
 git clone https://github.com/isaac-sim/IsaacLab.git
-cd IsaacLab
-git checkout tags/v0.3.1 -b my-v0.3.1
-```
-Put these in your ~/.bashrc so that it sources on each terminal
-```
-export ISAACSIM_PATH=$HOME/isaacsim
-export ISAACSIM_PYTHON_EXE=$ISAACSIM_PATH/python.sh
-```
-Add a sym link to connect to isaacsim:
-
-`ln -s ${ISAACSIM_PATH} _isaac_sim` 
-
-Run the conda setup:
-```
-./orbit.sh --conda
-conda activate orbit
-sudo apt install cmake build-essential
-pip install -U pip setuptools wheel build
-pip install toml
-```
-Correct the rsl-rl dependancy
-```
-cd ~/IsaacLab/source/extensions/omni.isaac.orbit_tasks
-code setup.py
-```
-Add this line to the extras require (replace the existing broken link)
-```
-"rsl-rl": ["rsl-rl@git+https://github.com/leggedrobotics/rsl_rl.git@v2.0.1#egg=rsl-rl"],`
-```
-Now reinstall:
-```
-./orbit.sh --install
-```
-Run these commands to correct any toml PEP517 isolation errors (make sure conda orbit is active): 
-```
-conda activate orbit
-# omni.isaac.orbit
-cd ~/IsaacLab/source/extensions/omni.isaac.orbit
-cat > pyproject.toml <<'EOF'
-[build-system]
-requires = ["setuptools>=64", "wheel", "toml"]
-build-backend = "setuptools.build_meta"
-EOF
-pip install -e .
-
-# omni.isaac.orbit_tasks
-cd ../omni.isaac.orbit_tasks
-[bashtxt.txt](https://github.com/user-attachments/files/24633163/bashtxt.txt)
-cat > pyproject.toml <<'EOF'
-[build-system]
-requires = ["setuptools>=64", "wheel", "toml"]
-build-backend = "setuptools.build_meta"
-EOF
-pip install -e .
-
-# omni.isaac.orbit_assets
-cd ../omni.isaac.orbit_assets
-cat > pyproject.toml <<'EOF'
-[build-system]
-requires = ["setuptools>=64", "wheel", "toml"]
-build-backend = "setuptools.build_meta"
-EOF
-pip install -e .
-```
-Then reinstall the specific packages with problems: 
-```
-# reset the env flags in the same shell
-unset PIP_USE_PEP517
-unset PIP_NO_BUILD_ISOLATION
-hash -r
-
-# reinstall each extension (PEP 517 + isolation ON by default)
-cd ~/IsaacLab/source/extensions/omni.isaac.orbit
-pip install -e .
-
-cd ../omni.isaac.orbit_tasks
-pip install -e .
-
-cd ../omni.isaac.orbit_assets
-pip install -e .
+cd ~/IsaacLab
 ```
 
-**Step V:** Unitree SDK for ethernet connection 
-```
-git clone https://github.com/unitreerobotics/unitree_ros2
-sudo apt install ros-humble-rmw-cyclonedds-cpp
-sudo apt install ros-humble-rosidl-generator-dds-idl
+Use the latest branch:
 
-cd ~/unitree_ros2/cyclonedds_ws/src
-git clone https://github.com/ros2/rmw_cyclonedds -b humble
-git clone https://github.com/eclipse-cyclonedds/cyclonedds -b releases/0.10.x 
-cd ..
-# If build failed, try run: `export LD_LIBRARY_PATH=/opt/ros/humble/lib` first.
-colcon build --packages-select cyclonedds #Compile cyclone-dds package
+```bash
+git checkout main
+git pull
 ```
-make sure to change the foxy source to a humble: 
-`sudo gedit ~/unitree_ros2/setup.sh`
 
-Now follow the network setup from https://github.com/unitreerobotics/unitree_ros2
-Update your bash file to source the ros2 unitree sdk:
+Install Linux build dependencies:
 
+```bash
+sudo apt update
+sudo apt install -y cmake build-essential
 ```
-source ~/unitree_ros2/setup.sh
-source ~/unitree_ros2/install/setup.bash
-```
-and some helper functions: 
-```
-# --- DDS toggle helpers (optional) ---
-use_cyclonedds() { export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp; echo "DDS: CycloneDDS"; }
-use_fastrtps()   { unset CYCLONEDDS_URI CYCLONEDDS_HOME CYCLONEDDS_CONFIG; export RMW_IMPLEMENTATION=rmw_fastrtps_cpp; echo "DDS: Fast DDS"; }
-```
-**Step VII:** Install all ros2 dependancies to build code in `~/Rescue/Isaac/go2_ws` 
 
+Install Isaac Lab and all learning framework dependencies:
+
+```bash
+conda activate env_isaaclab
+cd ~/IsaacLab
+./isaaclab.sh --install
 ```
-cd ~/Rescue/Isaac/go2_ws
-conda deactivate
-sudo rosdep init || true
-rosdep update
-source /opt/ros/humble/setup.bash
-rosdep install --from-paths src --ignore-src -r -y --rosdistro humble
-sudo apt install nlohmann-json3-dev
+
+If you only need RSL-RL, you can install a smaller set instead:
+
+```bash
+./isaaclab.sh --install rsl_rl
 ```
-**Step VII:** Setup Isaac Sim world
 
-You may have to adjust the dependancy of streamsdk if errors appear:
+Verify Isaac Lab:
+
+```bash
+cd ~/IsaacLab
+conda activate env_isaaclab
+
+./isaaclab.sh -p scripts/tutorials/00_sim/create_empty.py
 ```
-code ~/IsaacLab/source/apps/orbit.python.kit
-"omni.kit.streamsdk.plugins" = {version = "2.5.1", exact = true}
+
+You should see Isaac Sim open with an empty black viewport.
+
+Optional RSL-RL training smoke test:
+
+```bash
+cd ~/IsaacLab
+conda activate env_isaaclab
+
+./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/train.py \
+  --task=Isaac-Velocity-Rough-Anymal-C-v0 \
+  --headless
 ```
-Open `FarmReal.usd` from ~/Rescue/Isaac/go2_omniverse/envs/FarmReal in Isaac Sim:
-```
-cd ~/isaacsim
-./isaac-sim.selector.sh
-# make sure you enable ros2 humble bridge (not deprecated version)
-```
-Export FLATTENED USD to ~/Rescue/Isaac/go2_omniverse/envs `rotate.usd`. This should Allow the launcher script to attach materials and props to the world
-If dependancies for isaac lab are missing its because the setup failed to install them onto the sim's Kit python, fix with this: 
-```
-# --- Use KIT'S embedded Python everywhere ---
-PY=~/IsaacLab/_isaac_sim/kit/python/bin/python3
 
-# 0) Make sure pip exists in Kit Python
-$PY -m ensurepip --upgrade
+Stop it with `Ctrl+C` once you know it starts.
 
-# 1) Upgrade packaging tooling
-$PY -m pip install --upgrade pip setuptools wheel
-
-# 2) (optional) Quiet some ROS/launch warnings
-$PY -m pip install pyyaml pydot
-
-# 3) Install PyTorch built for CUDA 11.8 (works on RTX 4080)
-#    (Pick ONE of the two blocks below. If you already used 2.0.1+cu118 successfully, keep it.)
-
-# --- Option A: what you used earlier (stable with Isaac Sim 2023.1) ---
-$PY -m pip install --index-url https://download.pytorch.org/whl/cu118 \
-  torch==2.0.1+cu118 torchvision==0.15.2+cu118
-
-# --- Option B: newer torch (only if you want to update) ---
-# $PY -m pip install --index-url https://download.pytorch.org/whl/cu118 \
-#   torch==2.1.2 torchvision torchaudio
-
-# 4) Misc deps some Orbit/Sim code expects
-$PY -m pip install gitpython hydra-core omegaconf tensorboard
-
-# 5) Install the exact Isaac Lab pin for RSL-RL without touching Torch
-$PY -m pip install --no-deps \
-  "rsl-rl@git+https://github.com/leggedrobotics/rsl_rl.git@v2.0.1#egg=rsl-rl"
-
-# 6) Quick verification
-$PY - <<'PYCODE'
-import torch, sys
-print("torch:", torch.__version__)
-print("cuda available:", torch.cuda.is_available())
-print("device:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU")
-import rsl_rl
-print("rsl_rl OK")
-PYCODE
-```
+---
 
 ## User Guide
 If you installed the unitree_ros2 robot sdk cyclonedds will complain whenever the robot isn't attached to your computer. To fix this, Make sure to enter `use_fastrtps` anytime you want to run a ros2 command alongside the sim, like `ros2 topic echo /livox/imu`
