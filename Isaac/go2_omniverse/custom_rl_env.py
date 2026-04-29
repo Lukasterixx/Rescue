@@ -15,23 +15,23 @@ import omni.usd
 # ADDED IMPORTS FOR USD GENERATION
 from pxr import Usd, UsdGeom, Gf, UsdPhysics, Sdf, UsdShade
 
-from omni.isaac.orbit.envs import RLTaskEnvCfg
-from omni.isaac.orbit.utils import configclass
-import omni.isaac.orbit.sim as sim_utils
-from omni.isaac.orbit.assets import ArticulationCfg, AssetBaseCfg
-from omni.isaac.orbit.scene import InteractiveSceneCfg
-from omni.isaac.orbit.sensors import ContactSensorCfg, RayCasterCfg, patterns
-from omni.isaac.orbit.terrains import TerrainImporterCfg
-from omni.isaac.orbit_assets.unitree import UNITREE_GO2_CFG 
+from isaaclab.envs import ManagerBasedRLEnvCfg
+from isaaclab.utils import configclass
+import isaaclab.sim as sim_utils
+from isaaclab.assets import ArticulationCfg, AssetBaseCfg
+from isaaclab.scene import InteractiveSceneCfg
+from isaaclab.sensors import ContactSensorCfg, RayCasterCfg, patterns
+from isaaclab.terrains import TerrainImporterCfg
+from isaaclab_assets.robots.unitree import UNITREE_GO2_CFG 
 
-from omni.isaac.orbit.managers import EventTermCfg as EventTerm
-from omni.isaac.orbit.managers import ObservationGroupCfg as ObsGroup
-from omni.isaac.orbit.managers import ObservationTermCfg as ObsTerm
-from omni.isaac.orbit.managers import RewardTermCfg as RewTerm
-from omni.isaac.orbit.managers import SceneEntityCfg
-from omni.isaac.orbit.managers import TerminationTermCfg as DoneTerm
-from omni.isaac.orbit.utils.noise import AdditiveUniformNoiseCfg as Unoise
-import omni.isaac.orbit_tasks.locomotion.velocity.mdp as mdp
+from isaaclab.managers import EventTermCfg as EventTerm
+from isaaclab.managers import ObservationGroupCfg as ObsGroup
+from isaaclab.managers import ObservationTermCfg as ObsTerm
+from isaaclab.managers import RewardTermCfg as RewTerm
+from isaaclab.managers import SceneEntityCfg
+from isaaclab.managers import TerminationTermCfg as DoneTerm
+from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
+import isaaclab_tasks.manager_based.locomotion.velocity.mdp as mdp
 
 from terrain_cfg import ROUGH_TERRAINS_CFG
 from robots.g1.config import G1_CFG
@@ -43,7 +43,7 @@ def is_flat_terrain():
 # --- RESTORED MISSING HELPERS ---
 base_command = {}
 
-def constant_commands(env: RLTaskEnvCfg) -> torch.Tensor:
+def constant_commands(env: ManagerBasedRLEnvCfg) -> torch.Tensor:
     global base_command
     tensor_lst = torch.tensor([0.0, 0.0, 0.0], dtype=torch.float32, device=env.device).repeat(env.num_envs, 1)
     for i in range(env.num_envs):
@@ -89,31 +89,33 @@ class MySceneCfg(InteractiveSceneCfg):
     height_scanner = RayCasterCfg(
         prim_path="{ENV_REGEX_NS}/Robot/base",
         offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
-        attach_yaw_only=True,
+        ray_alignment="yaw",
         pattern_cfg=patterns.GridPatternCfg(resolution=0.1, size=[1.6, 1.0]),
         debug_vis=False,
         drift_range=(0.0, 0.0),
-        mesh_prim_paths=["/World/warehouse/ground"], 
+        mesh_prim_paths=["/World/warehouse/ground"],
         max_distance=100.0,
     )
 
     contact_forces = ContactSensorCfg(prim_path="{ENV_REGEX_NS}/Robot/.*", history_length=3, track_air_time=True)
     
-    # Inside your SceneCfg class:
-    light = AssetBaseCfg(
-        prim_path="/World/light",
-        spawn=sim_utils.DistantLightCfg(
-            intensity=3000.0,
-            color=(1.0, 1.0, 1.0),
-            angle=21.2,                # Softness of shadows (from your image)         
-        ),
-    )
-
+    # Grey Studio style lighting:
+    # neutral grey ambient dome + soft broad key light.
     sky_light = AssetBaseCfg(
         prim_path="/World/skyLight",
         spawn=sim_utils.DomeLightCfg(
-            intensity=1000.0,
-            color=(0.13, 0.13, 0.13)
+            intensity=1800.0,
+            color=(0.55, 0.55, 0.55),
+            visible_in_primary_ray=True,
+        ),
+    )
+
+    light = AssetBaseCfg(
+        prim_path="/World/light",
+        spawn=sim_utils.DistantLightCfg(
+            intensity=600.0,
+            color=(1.0, 1.0, 1.0),
+            angle=35.0,
         ),
     )
 
@@ -215,11 +217,9 @@ class RewardsCfg:
 
 @configclass
 class TerminationsCfg:
-    time_out = DoneTerm(func=mdp.time_out, time_out=True)
-    base_contact = DoneTerm(
-        func=mdp.illegal_contact,
-        params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names="base"), "threshold": 1.0},
-    )
+    time_out = None
+    base_contact = None
+   
 
 
 @configclass
@@ -236,9 +236,38 @@ class EventCfg:
         },
     )
 
+    reset_base = EventTerm(
+        func=mdp.reset_root_state_uniform,
+        mode="reset",
+        params={
+            "pose_range": {
+                "x": (0.0, 0.0),
+                "y": (0.0, 0.0),
+                "yaw": (0.0, 0.0),
+            },
+            "velocity_range": {
+                "x": (0.0, 0.0),
+                "y": (0.0, 0.0),
+                "z": (0.0, 0.0),
+                "roll": (0.0, 0.0),
+                "pitch": (0.0, 0.0),
+                "yaw": (0.0, 0.0),
+            },
+        },
+    )
+
+    reset_robot_joints = EventTerm(
+        func=mdp.reset_joints_by_scale,
+        mode="reset",
+        params={
+            "position_range": (1.0, 1.0),
+            "velocity_range": (0.0, 0.0),
+        },
+    )
+
 
 @configclass
-class LocomotionVelocityRoughEnvCfg(RLTaskEnvCfg):
+class LocomotionVelocityRoughEnvCfg(ManagerBasedRLEnvCfg):
     scene: MySceneCfg = MySceneCfg(num_envs=4096, env_spacing=2.5)
     viewer: ViewerCfg = ViewerCfg()
     observations: ObservationsCfg = ObservationsCfg()
@@ -273,7 +302,22 @@ class LocomotionVelocityRoughEnvCfg(RLTaskEnvCfg):
 class UnitreeGo2CustomEnvCfg(LocomotionVelocityRoughEnvCfg):
     def __post_init__(self):
         super().__post_init__()
-        self.scene.robot = UNITREE_GO2_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+        self.scene.robot = UNITREE_GO2_CFG.replace(
+            prim_path="{ENV_REGEX_NS}/Robot",
+            init_state=ArticulationCfg.InitialStateCfg(
+                # Maze safe-zone centre: start_r/start_c * cell_width ~= 6 * 1.2 = 7.2
+                pos=(6.2, 6.2, 0.42),
+                rot=(1.0, 0.0, 0.0, 0.0),
+                joint_pos={
+                    ".*L_hip_joint": 0.1,
+                    ".*R_hip_joint": -0.1,
+                    "F[L,R]_thigh_joint": 0.8,
+                    "R[L,R]_thigh_joint": 1.0,
+                    ".*_calf_joint": -1.5,
+                },
+                joint_vel={".*": 0.0},
+            ),
+        )
         self.scene.height_scanner.prim_path = "{ENV_REGEX_NS}/Robot/base"
         self.actions.joint_pos.scale = 0.25
         self.rewards.feet_air_time.params["sensor_cfg"].body_names = ".*_foot"
@@ -283,7 +327,10 @@ class UnitreeGo2CustomEnvCfg(LocomotionVelocityRoughEnvCfg):
         self.rewards.track_lin_vel_xy_exp.weight = 1.5
         self.rewards.track_ang_vel_z_exp.weight = 0.75
         self.rewards.dof_acc_l2.weight = -2.5e-7
-        self.terminations.base_contact.params["sensor_cfg"].body_names = "base"
+        self.terminations.base_contact = None
+
+        # Live simulation: do not periodically reset the robot.
+        self.terminations.time_out = None
 
 @configclass
 class G1RoughEnvCfg(LocomotionVelocityRoughEnvCfg):

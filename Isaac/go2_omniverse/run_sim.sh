@@ -1,54 +1,34 @@
-# Copyright (c) 2024, RoboVerse community
-#
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are met:
-#
-# 1. Redistributions of source code must retain the above copyright notice, this
-#    list of conditions and the following disclaimer.
-#
-# 2. Redistributions in binary form must reproduce the above copyright notice,
-#    this list of conditions and the following disclaimer in the documentation
-#    and/or other materials provided with the distribution.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#!/usr/bin/env bash
+set -e
 
-source /opt/ros/${ROS_DISTRO}/setup.bash
-cd IsaacSim-ros_workspaces/${ROS_DISTRO}_ws
-rosdep install --from-paths src --ignore-src -r -y
-colcon build
-source install/setup.bash
-cd ../..
-cd go2_omniverse_ws
-rosdep install --from-paths src --ignore-src -r -y
-colcon build
-source install/setup.bash
-cd ..
+cd ~/Rescue/Isaac/go2_omniverse
 
 eval "$(conda shell.bash hook)"
-conda activate orbit
+conda activate env_isaaclab
+
+# Prevent system ROS Python 3.10 paths leaking into Isaac Sim's Python 3.11
+unset PYTHONPATH
+unset AMENT_PREFIX_PATH
+unset COLCON_PREFIX_PATH
+unset CMAKE_PREFIX_PATH
+
+# ROS 2 bridge config
+export ROS_DISTRO=humble
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+export ROS_DOMAIN_ID=0
+export ROS_LOCALHOST_ONLY=0
+unset CYCLONEDDS_URI CYCLONEDDS_HOME CYCLONEDDS_CONFIG ROS_DISCOVERY_SERVER
+
+# Use Isaac Sim's bundled ROS 2 bridge libraries, not /opt/ros/humble Python packages
+ISAAC_BRIDGE_EXT="$CONDA_PREFIX/lib/python3.11/site-packages/isaacsim/exts/isaacsim.ros2.bridge"
+export LD_LIBRARY_PATH="$ISAAC_BRIDGE_EXT/humble/lib:${LD_LIBRARY_PATH}"
+
+# Optional, but often still needed on Ubuntu
 export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libstdc++.so.6
-export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$HOME/isaacsim/kit
 
-# NEW: Ensure Lidar Config Directory exists and copy the Unitree L1 config
-# This uses mkdir -p to avoid errors if the dir exists, and cp overwrites by default.
-mkdir -p $HOME/IsaacLab/source/exts/omni.isaac.sensor/data/lidar_configs
-cp $HOME/Rescue/Isaac/go2_omniverse/Isaac_sim/Unitree/Unitree_L1.json $HOME/IsaacLab/source/exts/omni.isaac.sensor/data/lidar_configs/
+# RTX lidar config location for Isaac Sim 5.x
+LIDAR_CONFIG_DIR="$CONDA_PREFIX/lib/python3.11/site-packages/isaacsim/exts/isaacsim.sensors.rtx/data/lidar_configs"
+mkdir -p "$LIDAR_CONFIG_DIR"
+cp -f ./Isaac_sim/Unitree/Unitree_L1.json "$LIDAR_CONFIG_DIR/"
 
-# NEW: Set Isaac Sim paths
-export ISAAC_PATH=$HOME/isaacsim
-export EXP_PATH=$ISAAC_PATH/apps/omni.isaac.sim.python.kit
-export CARB_APP_PATH=$ISAAC_PATH/kit
-
-export ORBIT_PATH=$HOME/IsaacLab
-
-# Run the Python script
 python main.py --robot_amount 1 --robot go2 --terrain rough --custom_env maze

@@ -3,17 +3,15 @@ from __future__ import annotations
 
 # ----------------------- Launch Isaac Sim first -----------------------
 import argparse
-from omni.isaac.orbit.app import AppLauncher
+from isaaclab.app import AppLauncher
 
 import cli_args
 import time
 import os
 import threading
-from rclpy.executors import MultiThreadedExecutor
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Train an RL agent with RSL-RL.")
-parser.add_argument("--cpu", action="store_true", default=False, help="Use CPU pipeline.")
 parser.add_argument("--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations.")
 parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default="Isaac-Velocity-Rough-Unitree-Go2-v0", help="Name of the task.")
@@ -40,19 +38,19 @@ import carb
 import gymnasium as gym
 import torch
 
-from omni.isaac.orbit_tasks.utils import get_checkpoint_path
-from omni.isaac.orbit_tasks.utils.wrappers.rsl_rl import (
+from isaaclab_tasks.utils import get_checkpoint_path
+from isaaclab_rl.rsl_rl import (
     RslRlOnPolicyRunnerCfg,
     RslRlVecEnvWrapper,
 )
-import omni.isaac.orbit.sim as sim_utils
+import isaaclab.sim as sim_utils
 import omni.appwindow
 from rsl_rl.runners import OnPolicyRunner
 
 # Enable required extensions BEFORE importing ros2.py (fixes omni.isaac.sensor import)
 ext_manager = omni.kit.app.get_app().get_extension_manager()
-ext_manager.set_extension_enabled_immediate("omni.isaac.ros2_bridge", True)
-for _ext in ["omni.isaac.sensor", "omni.isaac.range_sensor"]:
+ext_manager.set_extension_enabled_immediate("isaacsim.ros2.bridge", True)
+for _ext in ["isaacsim.core.nodes", "isaacsim.sensors.rtx", "isaacsim.sensors.camera", "isaacsim.sensors.physics", "isaacsim.sensors.physx"]:
     try:
         ext_manager.set_extension_enabled_immediate(_ext, True)
     except Exception:
@@ -60,7 +58,8 @@ for _ext in ["omni.isaac.sensor", "omni.isaac.range_sensor"]:
 
 # Now modules that rely on those extensions
 import rclpy
-from ros2 import RobotBaseNode, add_camera, add_rtx_lidar, pub_robo_data_ros2
+from rclpy.executors import MultiThreadedExecutor
+from ros2 import RobotBaseNode, add_camera, add_rtx_lidar, pub_robo_data_ros2, add_ee_flashlight, toggle_lidar_debug_draw
 from geometry_msgs.msg import Twist
 
 from agent_cfg import unitree_go2_agent_cfg, unitree_g1_agent_cfg
@@ -72,7 +71,7 @@ from omnigraph import create_front_cam_omnigraph
 # USD helpers (for moving the warehouse visually)
 import omni.usd
 from pxr import UsdGeom, Gf, Tf
-from omni.isaac.orbit.utils.math import quat_apply
+from isaaclab.utils.math import quat_apply
 
 
 # ===================== Warehouse Visual Offset (purely visual) =====================
@@ -96,32 +95,44 @@ _ENV_REF = None
 # --- NEW: Reference to ROS node for resetting odom ---
 _ROS_NODE_REF = None
 
-# ===================== Arm Teleoperation State =====================
-ARM_TELEOP_ACTIVE = False
-# Starting default position (x, y, z) slightly forward and up relative to the base
-ARM_TELEOP_POS = [0.3, 0.0, 0.2] 
-# Default rotation (w, x, y, z) - facing forward
-ARM_TELEOP_ROT = [1.0, 0.0, 0.0, 0.0]
-# Track the current yaw angle independently
+# ===================== Manual Reset State =====================
+RESET_REQUESTED = False
+
+# Robot spawn pose in maze.
+ROBOT_RESET_ROOT_POSE = None
+ROBOT_RESET_JOINT_POS = None
+ARM_RESET_JOINT_POS = None
+ROBOT_START_POS = [6.2, 6.2, 0.42]
+ROBOT_START_ROT = [1.0, 0.0, 0.0, 0.0]
+
+# Default arm IK target, relative to robot base/root frame.
+DEFAULT_ARM_TELEOP_POS = [0.3, 0.0, 0.4]
+DEFAULT_ARM_TELEOP_ROT = [1.0, 0.0, 0.0, 0.0]
+
+ARM_TELEOP_ACTIVE = True
+ARM_TELEOP_POS = DEFAULT_ARM_TELEOP_POS.copy()
+ARM_TELEOP_ROT = DEFAULT_ARM_TELEOP_ROT.copy()
 ARM_TELEOP_YAW = 0.0
 
-from omni.isaac.core.utils.viewports import set_camera_view
-
-from omni.isaac.core.articulations import ArticulationView
-import omni.isaac.core.utils.prims as prim_utils
+from isaacsim.core.utils.viewports import set_camera_view
 
 import numpy as np
 
 import os
 
-from omni.isaac.orbit.controllers import DifferentialIKController, DifferentialIKControllerCfg
-from omni.isaac.orbit.utils.math import quat_apply, quat_mul
+from isaaclab.controllers import DifferentialIKController, DifferentialIKControllerCfg
+from isaaclab.utils.math import quat_apply, quat_mul
 
 def generate_arm_usd():
     """Converts the URDF to a USD file and returns the path."""
-    from omni.isaac.core.utils.extensions import enable_extension
-    enable_extension("omni.importer.urdf")
-    import omni.importer.urdf as urdf_importer
+    import omni.kit.app
+    
+    try:
+        omni.kit.app.get_app().get_extension_manager().set_extension_enabled_immediate("isaacsim.asset.importer.urdf", True)
+        import isaacsim.asset.importer.urdf as urdf_importer
+    except ImportError:
+        omni.kit.app.get_app().get_extension_manager().set_extension_enabled_immediate("omni.importer.urdf", True)
+        import omni.importer.urdf as urdf_importer
     import omni.kit.commands
     
     urdf_interface = urdf_importer._urdf.acquire_urdf_interface()
@@ -426,13 +437,127 @@ def _arrow_dir_pressed(dir_name: str):
         _ARROW_CUR_STEP = WH_STEP_M
     return _ARROW_CUR_STEP
 
+def reset_robot_and_arm(env, current_rel_pos, current_rel_rot, diff_ik_controller=None):
+    """Teleport robot back to start and reset arm IK target/state."""
+    global RESET_REQUESTED
+    global ARM_TELEOP_ACTIVE, ARM_TELEOP_POS, ARM_TELEOP_ROT, ARM_TELEOP_YAW
+    global ROBOT_RESET_ROOT_POSE, ROBOT_RESET_JOINT_POS, ARM_RESET_JOINT_POS
+
+    robot = env.unwrapped.scene["robot"]
+    arm = env.unwrapped.scene["arm"]
+    device = env.unwrapped.device
+    num_envs = robot.data.root_state_w.shape[0]
+
+    # ---------------- Robot root pose ----------------
+    if ROBOT_RESET_ROOT_POSE is not None:
+        root_pose = ROBOT_RESET_ROOT_POSE.clone()
+    else:
+        root_pose = robot.data.root_state_w[:, :7].clone()
+        root_pose[:, 0] = ROBOT_START_POS[0]
+        root_pose[:, 1] = ROBOT_START_POS[1]
+        root_pose[:, 2] = ROBOT_START_POS[2]
+        root_pose[:, 3] = ROBOT_START_ROT[0]
+        root_pose[:, 4] = ROBOT_START_ROT[1]
+        root_pose[:, 5] = ROBOT_START_ROT[2]
+        root_pose[:, 6] = ROBOT_START_ROT[3]
+
+    root_vel = torch.zeros_like(robot.data.root_state_w[:, 7:13])
+
+    robot.write_root_pose_to_sim(root_pose)
+    robot.write_root_velocity_to_sim(root_vel)
+
+    # ---------------- Robot joints ----------------
+    # Use the configured/default standing pose from ArticulationCfg init_state.
+    if ROBOT_RESET_JOINT_POS is not None:
+        joint_pos = ROBOT_RESET_JOINT_POS.clone()
+    else:
+        joint_pos = robot.data.default_joint_pos.clone()
+
+    joint_vel = torch.zeros_like(robot.data.default_joint_vel)
+
+    robot.write_joint_state_to_sim(joint_pos, joint_vel)
+
+    # ---------------- Clear policy command/action state ----------------
+    for i in range(len(custom_rl_env.base_command)):
+        custom_rl_env.base_command[str(i)] = [0, 0, 0]
+
+    # ---------------- Reset arm target ----------------
+    ARM_TELEOP_ACTIVE = True
+    ARM_TELEOP_POS = DEFAULT_ARM_TELEOP_POS.copy()
+    ARM_TELEOP_ROT = DEFAULT_ARM_TELEOP_ROT.copy()
+    ARM_TELEOP_YAW = 0.0
+
+    if _ROS_NODE_REF is not None:
+        # Prevent old ROS arm command from immediately pulling the arm somewhere else.
+        _ROS_NODE_REF.arm_pose_target_rel = None
+
+        # Make odom/map consumers see this as a fresh origin if your node supports it.
+        if hasattr(_ROS_NODE_REF, "trigger_odom_reset"):
+            _ROS_NODE_REF.trigger_odom_reset()
+
+    # Reset the smoothed IK target so the arm moves back to default cleanly.
+    default_pos = torch.tensor(
+        DEFAULT_ARM_TELEOP_POS,
+        device=device,
+        dtype=torch.float32,
+    ).repeat(num_envs, 1)
+
+    default_rot = torch.tensor(
+        DEFAULT_ARM_TELEOP_ROT,
+        device=device,
+        dtype=torch.float32,
+    ).repeat(num_envs, 1)
+
+    current_rel_pos[:] = default_pos
+    current_rel_rot[:] = default_rot
+
+    if diff_ik_controller is not None:
+        try:
+            diff_ik_controller.reset()
+        except Exception:
+            pass
+
+    # Also pin the arm root immediately to the reset robot pose.
+    arm.write_root_pose_to_sim(root_pose)
+    arm.write_root_velocity_to_sim(torch.zeros_like(root_vel))
+
+    # Reset the actual Z1 arm joints too.
+    if ARM_RESET_JOINT_POS is not None:
+        arm_joint_pos = ARM_RESET_JOINT_POS.clone()
+    else:
+        arm_joint_pos = arm.data.default_joint_pos.clone()
+
+    arm_joint_vel = torch.zeros_like(arm.data.default_joint_vel)
+    arm.write_joint_state_to_sim(arm_joint_pos, arm_joint_vel)
+
+    reset_xyz = root_pose[0, :3].detach().cpu().numpy()
+    print(
+        f"[RESET] Robot reset to ({reset_xyz[0]:.2f}, "
+        f"{reset_xyz[1]:.2f}, {reset_xyz[2]:.2f}); "
+        f"arm target reset to {DEFAULT_ARM_TELEOP_POS}"
+    )
+
+    RESET_REQUESTED = False
+
 # ===================== Keyboard Handling =====================
 def sub_keyboard_event(event, *args, **kwargs) -> bool:
     # Add ARM_TELEOP_YAW to the globals list here
-    global ARM_TELEOP_ACTIVE, ARM_TELEOP_POS, ARM_TELEOP_ROT, ARM_TELEOP_YAW 
+    global ARM_TELEOP_ACTIVE, ARM_TELEOP_POS, ARM_TELEOP_ROT, ARM_TELEOP_YAW, RESET_REQUESTED
     speed = 1.0 
 
     if event.type in (carb.input.KeyboardEventType.KEY_PRESS, carb.input.KeyboardEventType.KEY_REPEAT):
+
+        # -------- Manual reset ----------
+        if event.input.name == 'R':
+            RESET_REQUESTED = True
+            print("[RESET] Requested robot + arm reset.")
+            return True
+        
+        # -------- Toggle Lidar Debug ----------
+        if event.input.name == 'T':
+            toggle_lidar_debug_draw()
+            return True
+        
         # -------- Arrow keys & 1/0: Z1 Arm Teleoperation ----------
         is_arm_key = False
         arm_step = 0.02 # Meters to move per keypress
@@ -595,6 +720,8 @@ def specify_cmd_for_robots(numv_envs):
 def run_sim():
     global _ENV_REF
     global _ROS_NODE_REF
+    global RESET_REQUESTED
+    global ARM_TELEOP_POS, ARM_TELEOP_ROT, ARM_TELEOP_YAW
     # subscribe to keyboard
     _input = carb.input.acquire_input_interface()
     _appwindow = omni.appwindow.get_default_app_window()
@@ -610,34 +737,46 @@ def run_sim():
     # --- NEW: NATIVE ORBIT ARM INTEGRATION ---
     dest_usd_path = generate_arm_usd()
     
-    from omni.isaac.orbit.assets import ArticulationCfg
-    from omni.isaac.orbit.actuators import ImplicitActuatorCfg
+    from isaaclab.assets import ArticulationCfg
+    from isaaclab.actuators import ImplicitActuatorCfg
     
     # We natively inject the arm into the Orbit configuration
     env_cfg.scene.arm = ArticulationCfg(
         prim_path="{ENV_REGEX_NS}/Arm",
         spawn=sim_utils.UsdFileCfg(
             usd_path=dest_usd_path,
-            # Disable gravity so the arm floats perfectly before we teleport it
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(disable_gravity=True),
-            collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=False),
         ),
         init_state=ArticulationCfg.InitialStateCfg(
-            pos=(0.0, 0.0, 0.4),
+            pos=(7.2, 7.2, 0.42),
+            rot=(1.0, 0.0, 0.0, 0.0),
+            joint_pos={
+                "joint1": 0.0,
+                "joint2": 0.7,
+                "joint3": -1.2,
+                "joint4": 0.0,
+                "joint5": 0.8,
+                "joint6": 0.0,
+            },
+            joint_vel={
+                "joint1": 0.0,
+                "joint2": 0.0,
+                "joint3": 0.0,
+                "joint4": 0.0,
+                "joint5": 0.0,
+                "joint6": 0.0,
+            },
         ),
         actuators={
-            "arm_joints": ImplicitActuatorCfg(
+            "arm_motors": ImplicitActuatorCfg(
                 joint_names_expr=[".*"],
-                stiffness=400.0,
-                damping=40.0,
-            )
-        }
+                stiffness=800.0,
+                damping=80.0,
+            ),
+        },
     )
-    # -----------------------------------------
 
-    # ROS camera graph(s)
-    for i in range(env_cfg.scene.num_envs):
-        create_front_cam_omnigraph(i)
+    
+    # -----------------------------------------
 
     specify_cmd_for_robots(env_cfg.scene.num_envs)
 
@@ -650,21 +789,50 @@ def run_sim():
     env = RslRlVecEnvWrapper(env)
     _ENV_REF = env  # expose to checkpoint helpers
 
+    global ROBOT_RESET_ROOT_POSE, ROBOT_RESET_JOINT_POS, ARM_RESET_JOINT_POS
+
+    robot = env.unwrapped.scene["robot"]
+    arm = env.unwrapped.scene["arm"]
+
+    ROBOT_RESET_ROOT_POSE = robot.data.root_state_w[:, :7].clone()
+    ROBOT_RESET_JOINT_POS = robot.data.joint_pos.clone()
+    ARM_RESET_JOINT_POS = arm.data.joint_pos.clone()
+
+    print("[RESET] Captured startup robot root pose:", ROBOT_RESET_ROOT_POSE[0].detach().cpu().numpy())
+
+    arm = env.unwrapped.scene["arm"]
+    print("[ARM DEBUG] joint names:", arm.data.joint_names)
+    print("[ARM DEBUG] body names:", arm.data.body_names)
+
     # load policy
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg["experiment_name"])
     log_root_path = os.path.abspath(log_root_path)
     resume_path = get_checkpoint_path(log_root_path, agent_cfg["load_run"], agent_cfg["load_checkpoint"])
     
     ppo_runner = OnPolicyRunner(env, agent_cfg, log_dir=None, device=agent_cfg["device"])
-    ppo_runner.load(resume_path)
+    try:
+        ppo_runner.load(resume_path, load_optimizer=False)
+    except TypeError:
+        # Fallback for manual weight injection if rsl_rl API version differs
+        import torch
+        ckpt = torch.load(resume_path, map_location=agent_cfg["device"])
+        ppo_runner.alg.actor.load_state_dict(ckpt["actor_state_dict"], strict=True)
+        ppo_runner.alg.critic.load_state_dict(ckpt["critic_state_dict"], strict=True)
+
     policy = ppo_runner.get_inference_policy(device=env.unwrapped.device)
 
     # first obs
-    obs, _ = env.get_observations()
+    obs = env.get_observations()
 
     # sensors + env USD
-    annotator_lst = add_rtx_lidar(env_cfg.scene.num_envs, args_cli.robot, False)    
+    annotator_lst = add_rtx_lidar(env_cfg.scene.num_envs, args_cli.robot, True)    
     camera_lst = add_camera(env_cfg.scene.num_envs, args_cli.robot)
+    add_ee_flashlight(env_cfg.scene.num_envs, args_cli.robot)
+
+    # ROS camera graph(s)
+    for i in range(env_cfg.scene.num_envs):
+        create_front_cam_omnigraph(i)
+
     setup_custom_env()
 
     stage = omni.usd.get_context().get_stage()
@@ -723,12 +891,19 @@ def run_sim():
             # --- 1. Pin the Arm using Native Orbit API ---
             robot = env.unwrapped.scene["robot"]
             arm = env.unwrapped.scene["arm"]
+
+            if RESET_REQUESTED:
+                reset_robot_and_arm(
+                    env,
+                    current_rel_pos,
+                    current_rel_rot,
+                    diff_ik_controller,
+                )
             
             # Grab the current base position and orientation
             root_pose = robot.data.root_state_w[:, :7].clone()
             
-            # A. Local offset: 30cm forward (+0.3 X), flush height (0.0 Z)
-            local_offset = torch.tensor([[0.0, 0.0, 0.0]], device=env.unwrapped.device, dtype=torch.float32)
+            local_offset = torch.tensor([[0.0, 0.0, 0.08]], device=env.unwrapped.device, dtype=torch.float32)
             local_offset = local_offset.repeat(env_cfg.scene.num_envs, 1)
             
             # B. Rotate this local offset into the world frame using the dog's orientation
@@ -746,16 +921,22 @@ def run_sim():
             # ---------------------------------------------
 
             # --- 2. Teleop OR ROS 2 controls the Arm joints via Inverse Kinematics ---
-            target_pos_np = None
-            target_rot_np = None
+            # If a new ROS 2 command arrived, seamlessly update the unified target state
+            if _ROS_NODE_REF is not None and getattr(_ROS_NODE_REF, 'arm_pose_target_rel', None) is not None:
+                ros_pos, ros_rot = _ROS_NODE_REF.arm_pose_target_rel
+                
+                ARM_TELEOP_POS[:] = ros_pos.tolist()
+                ARM_TELEOP_ROT[:] = ros_rot.tolist()
+                
+                # Extract yaw to keep keyboard teleop smoothly in sync
+                w, x, y, z = ros_rot
+                ARM_TELEOP_YAW = float(np.arctan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z)))
+                
+                # Clear the ROS command so we don't lock out the keyboard
+                _ROS_NODE_REF.arm_pose_target_rel = None
 
-            # Prioritize keyboard teleoperation if it has been activated
-            if ARM_TELEOP_ACTIVE:
-                target_pos_np = np.array(ARM_TELEOP_POS, dtype=np.float32)
-                target_rot_np = np.array(ARM_TELEOP_ROT, dtype=np.float32)
-            # Fall back to ROS 2 topic commands
-            elif _ROS_NODE_REF is not None and getattr(_ROS_NODE_REF, 'arm_pose_target_rel', None) is not None:
-                target_pos_np, target_rot_np = _ROS_NODE_REF.arm_pose_target_rel
+            target_pos_np = np.array(ARM_TELEOP_POS, dtype=np.float32)
+            target_rot_np = np.array(ARM_TELEOP_ROT, dtype=np.float32)
 
             # Only run the IK solver if we have a valid target
             if target_pos_np is not None and target_rot_np is not None:
@@ -867,6 +1048,10 @@ def run_sim():
             # --- OPTIMIZED ROS PUBLISHING ---
             ros_step_counter += 1
             if ros_step_counter >= ros_decimation:
+                # Grab the world position and quaternion of the end-effector
+                ee_pos_np = arm.data.body_pos_w[0, ee_body_idx, :].cpu().numpy()
+                ee_quat_np = arm.data.body_quat_w[0, ee_body_idx, :].cpu().numpy()
+
                 next_deadline = pub_robo_data_ros2(
                     args_cli.robot, 
                     env_cfg.scene.num_envs, 
@@ -874,7 +1059,9 @@ def run_sim():
                     env, 
                     annotator_lst, 
                     next_deadline,
-                    camera_lst=camera_lst
+                    camera_lst=camera_lst,
+                    ee_pos=ee_pos_np,
+                    ee_quat=ee_quat_np
                 )
                 ros_step_counter = 0
             # --------------------------------

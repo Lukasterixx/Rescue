@@ -17,7 +17,6 @@ from geometry_msgs.msg import TransformStamped, Pose
 from std_msgs.msg import Header, String, Empty
 from rosgraph_msgs.msg import Clock
 from nav_msgs.msg import Odometry
-from go2_interfaces.msg import Go2State  # Ensure you have this custom interface package
 from tf2_ros import TransformBroadcaster
 from tf2_ros.static_transform_broadcaster import StaticTransformBroadcaster
 from sensor_msgs_py import point_cloud2
@@ -25,18 +24,54 @@ from sensor_msgs_py import point_cloud2
 # --- Omniverse / Pixar Imports ---
 from pxr import Gf, UsdGeom
 import omni.usd
+import omni.timeline
+import carb
 import omni.replicator.core as rep
-from omni.isaac.orbit.sensors import CameraCfg, Camera
-from omni.isaac.sensor import LidarRtx
-import omni.isaac.orbit.sim as sim_utils
+from isaaclab.sensors import CameraCfg, Camera
+from isaacsim.sensors.rtx import LidarRtx
+import isaaclab.sim as sim_utils
 from scipy.spatial.transform import Rotation
 from PIL import Image
 import datetime
 import os
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Pose
+from builtin_interfaces.msg import Time as RosTime
 
 DISABLE_RING_AND_TIME = True    # fast mode
+LIVOX_OFFSET_BASE = np.array([0.3, 0.0, 0.25], dtype=float)
+
+# Global references to prevent sensors from being garbage collected
+_lidars_keep_alive = []
+_cameras_keep_alive = []
+_lidar_render_products = []
+_lidar_debug_enabled = False
+_lidar_debug_writer = None
+
+def get_isaac_sim_time_msg(env):
+    """Return Isaac/IsaacLab simulation time as a ROS Time message."""
+    sim_time = None
+
+    # Isaac Lab usually exposes sim time here.
+    try:
+        sim_time = float(env.unwrapped.sim.current_time)
+    except Exception:
+        pass
+
+    # Fallback: step counter * physics/render step.
+    if sim_time is None:
+        try:
+            sim_time = float(env.unwrapped.common_step_counter) * float(env.unwrapped.step_dt)
+        except Exception:
+            sim_time = 0.0
+
+    sec = int(sim_time)
+    nanosec = int((sim_time - sec) * 1e9)
+
+    msg = RosTime()
+    msg.sec = sec
+    msg.nanosec = nanosec
+    return msg
 
 def get_storage_path(batch_id):
     """
@@ -131,35 +166,203 @@ def compute_time_from_azimuth(points_xyz: np.ndarray, scan_period: float,
 
 def update_meshes_for_cloud2(position_array, origin, rot):
     pts = position_array.copy()
-    # Apply X offset (forward 20cm)
-    pts[:, 0] += 0.2 
-    # Keep Z offset (up 40cm)
-    pts[:, 2] += 0.4
+    # Apply LIVOX_OFFSET_BASE using numpy broadcasting
+    pts += LIVOX_OFFSET_BASE
     return pts
+
+def toggle_lidar_debug_draw():
+    global _lidar_debug_enabled, _lidar_render_products, _lidar_debug_writer
+    if not _lidar_render_products:
+        return
+    _lidar_debug_enabled = not _lidar_debug_enabled
+    
+    if _lidar_debug_writer is None:
+        _lidar_debug_writer = rep.writers.get("RtxLidarDebugDrawPointCloud")
+        
+    if _lidar_debug_enabled:
+        _lidar_debug_writer.attach(_lidar_render_products)
+        print("[LIDAR] Debug drawing ENABLED")
+    else:
+        _lidar_debug_writer.detach()
+        print("[LIDAR] Debug drawing DISABLED")
+
+def create_rtx_lidar_ros2_graph(robot_num, lidar_sensor, topic_name="/glim_rosnode/points"):
+    import omni.graph.core as og
+    keys = og.Controller.Keys
+    graph_path = f"/ROS_RTX_LIDAR_{robot_num}"
+    render_product_path = lidar_sensor.get_render_product_path()
+
+    og.Controller.edit(
+        {
+            "graph_path": graph_path,
+            "evaluator_name": "execution",
+            "pipeline_stage": og.GraphPipelineStage.GRAPH_PIPELINE_STAGE_SIMULATION,
+        },
+        {
+            keys.CREATE_NODES: [
+                ("OnPlaybackTick", "omni.graph.action.OnPlaybackTick"),
+                ("ROS2Context", "isaacsim.ros2.bridge.ROS2Context"),
+                ("RtxLidarHelper", "isaacsim.ros2.bridge.ROS2RtxLidarHelper"),
+            ],
+            keys.SET_VALUES: [
+                ("RtxLidarHelper.inputs:enabled", True),
+                ("RtxLidarHelper.inputs:renderProductPath", render_product_path),
+                ("RtxLidarHelper.inputs:topicName", topic_name),
+                ("RtxLidarHelper.inputs:frameId", "livox_frame"),
+                ("RtxLidarHelper.inputs:type", "point_cloud"),
+                ("RtxLidarHelper.inputs:fullScan", True),
+                ("RtxLidarHelper.inputs:frameSkipCount", 0),
+                ("RtxLidarHelper.inputs:queueSize", 10),
+            ],
+            keys.CONNECT: [
+                ("OnPlaybackTick.outputs:tick", "RtxLidarHelper.inputs:execIn"),
+                ("ROS2Context.outputs:context", "RtxLidarHelper.inputs:context"),
+            ],
+        },
+    )
 
 def add_rtx_lidar(num_envs, robot_type, debug=False):
     annotator_lst = []
+    global _lidars_keep_alive
+    global _lidar_render_products
+    global _lidar_debug_enabled
+    global _lidar_debug_writer
+
+    _lidar_debug_enabled = debug
+    _lidar_render_products.clear()
+
+    settings = carb.settings.get_settings()
+    settings.set_bool("/app/sensors/nv/lidar/outputBufferOnGPU", True)
+    omni.timeline.get_timeline_interface().play()
+    config_name = "Example_Rotary"
+
     for i in range(num_envs):
-        lidar_sensor = LidarRtx(f'/World/envs/env_{i}/Robot/base/lidar_sensor',
-                                rotation_frequency = 10,
-                                pulse_time=1, 
-                                translation=(0.2, 0, 0.4),
-                                orientation=(1.0, 0.0, 0.0, 0.0),
-                                config_file_name= "Unitree_L1",
-                                )
+        if robot_type == "g1":
+            lidar_prim_path = f"/World/envs/env_{i}/Robot/head_link/lidar_sensor"
+            lidar_translation = (0.0, 0.0, 0.0)
+        else:
+            lidar_prim_path = f"/World/envs/env_{i}/Robot/base/lidar_sensor"
+            lidar_translation = tuple(LIVOX_OFFSET_BASE)
 
-        if debug:
-            writer = rep.writers.get("RtxLidar" + "DebugDrawPointCloudBuffer")
-            writer.attach([lidar_sensor.get_render_product_path()])
+        lidar_sensor = LidarRtx(
+            prim_path=lidar_prim_path,
+            translation=lidar_translation,
+            orientation=(1.0, 0.0, 0.0, 0.0),
+            config_file_name=config_name,
+        )
+        lidar_sensor.initialize()
 
-        annotator = rep.AnnotatorRegistry.get_annotator("RtxSensorCpuIsaacCreateRTXLidarScanBuffer")
-        annotator.attach(lidar_sensor.get_render_product_path())
-        annotator_lst.append(annotator)
+        stage = omni.usd.get_context().get_stage()
+        prim = stage.GetPrimAtPath(lidar_sensor.prim_path)
+        
+        if not prim or not prim.IsValid():
+            annotator_lst.append(None)
+            _lidars_keep_alive.append(lidar_sensor)
+            continue
+
+        # Rate/range overrides
+        safe_overrides = {
+            # Increased 5x to maintain point density
+            "omni:sensor:Core:reportRateBaseHz": 4000,
+            # Increased from 10Hz to 50Hz to eliminate motion distortion during fast turns
+            "omni:sensor:Core:scanRateBaseHz": 50,
+            "omni:sensor:Core:nearRangeM": 0.6,
+            "omni:sensor:Core:farRangeM": 30.0,
+            "omni:sensor:Core:numberOfEmitters": 128,
+            "omni:sensor:Core:numberOfChannels": 128,
+        }
+
+        for attr_name, value in safe_overrides.items():
+            attr = prim.GetAttribute(attr_name)
+            if attr and attr.IsValid():
+                attr.Set(value)
+
+        # Livox-ish blended vertical layout
+        elev_attr_name = "omni:sensor:Core:emitterState:s001:elevationDeg"
+        elev_attr = prim.GetAttribute(elev_attr_name)
+
+        if elev_attr and elev_attr.IsValid():
+            vertical_channels_per_group = 32
+            num_azimuth_groups = 4
+            vertical_min_deg = -15.0
+            vertical_max_deg = 45.0
+
+            base_stack = np.linspace(
+                vertical_min_deg,
+                vertical_max_deg,
+                vertical_channels_per_group,
+            ).astype(np.float32)
+
+            rng = np.random.default_rng(seed=42)
+            all_elev = []
+            jitter_std_deg = 0.45
+
+            for group_idx in range(num_azimuth_groups):
+                group_jitter = rng.normal(
+                    loc=0.0,
+                    scale=jitter_std_deg,
+                    size=vertical_channels_per_group,
+                ).astype(np.float32)
+
+                group_stack = base_stack + group_jitter
+                group_stack = np.clip(group_stack, vertical_min_deg, vertical_max_deg)
+                group_stack = np.sort(group_stack)
+                all_elev.extend(group_stack.tolist())
+
+            elev_attr.Set(all_elev)
+
+        create_rtx_lidar_ros2_graph(i, lidar_sensor, topic_name="/glim_rosnode/points")
+        
+        _lidar_render_products.append(lidar_sensor.get_render_product_path())
+
+        annotator_lst.append(None) # Not strictly needed if using raw ROS bridge
+        _lidars_keep_alive.append(lidar_sensor)
+        
+    if _lidar_debug_enabled and _lidar_render_products:
+        if _lidar_debug_writer is None:
+            _lidar_debug_writer = rep.writers.get("RtxLidarDebugDrawPointCloud")
+        _lidar_debug_writer.attach(_lidar_render_products)
+
     return annotator_lst
+
+def add_ee_flashlight(num_envs, robot_type):
+    """Attach a strong forward-facing flashlight spotlight to the Z1 end-effector."""
+    from pxr import UsdLux, UsdGeom, Gf
+    import omni.usd
+
+    stage = omni.usd.get_context().get_stage()
+
+    for i in range(num_envs):
+        if robot_type == "g1":
+            parent_path = f"/World/envs/env_{i}/Robot/head_link"
+        else:
+            parent_path = f"/World/envs/env_{i}/Arm/link06"
+
+        parent_prim = stage.GetPrimAtPath(parent_path)
+        if not parent_prim or not parent_prim.IsValid():
+            print(f"[FLASHLIGHT][WARN] Missing parent prim: {parent_path}")
+            continue
+
+        light_path = f"{parent_path}/flashlight"
+
+        light = UsdLux.SphereLight.Define(stage, light_path)
+        light.GetPrim().SetTypeName("SphereLight")
+
+        # Stronger bulb-style emitter
+        light.CreateIntensityAttr(500000.0)
+        light.CreateRadiusAttr(0.04)
+        light.CreateColorAttr(Gf.Vec3f(1.0, 0.96, 0.85))
+        light.CreateExposureAttr(2.0)
+
+        xform = UsdGeom.Xformable(light.GetPrim())
+        xform.ClearXformOpOrder()
+        xform.AddTranslateOp().Set(Gf.Vec3d(0.15, 0.0, 0.0))
+
+        print(f"[FLASHLIGHT] Added stronger end-effector light at {light_path}")
 
 def add_camera(num_envs, robot_type):
     annotators = []
-    _cameras_keep_alive = [] 
+    global _cameras_keep_alive 
 
     for i in range(num_envs):
         # Mount the camera to link06 (end-effector) of the Z1 arm
@@ -216,7 +419,7 @@ def _extract_optional(bundle, *candidates):
     return None
 
 
-def pub_robo_data_ros2(robot_type, num_envs, base_node, env, annotator_lst, next_deadline, camera_lst=None):
+def pub_robo_data_ros2(robot_type, num_envs, base_node, env, annotator_lst, next_deadline, camera_lst=None, ee_pos=None, ee_quat=None):
     # --- Check for photo request (triggered by string ID) ---
     if base_node.photo_requested and camera_lst is not None:
         save_images_to_disk(camera_lst, base_node.photo_batch_id)
@@ -273,60 +476,72 @@ def pub_robo_data_ros2(robot_type, num_envs, base_node, env, annotator_lst, next
                 rotate_op.Set(final_rot)
 
     # --- Standard Pub Logic ---
-    time_now_for_clock = base_node.get_clock().now().to_msg()
+    # Use Isaac simulation time, not wall-clock time.
+    time_now_for_clock = get_isaac_sim_time_msg(env)
+
     clock_msg = Clock()
     clock_msg.clock = time_now_for_clock
     base_node.clock_pub.publish(clock_msg)
 
     for i in range(num_envs):
         base_node.publish_joints(
-            env.env.scene["robot"].data.joint_names,
-            env.env.scene["robot"].data.joint_pos[i],
-            i
+            env.unwrapped.scene["robot"].data.joint_names,
+            env.unwrapped.scene["robot"].data.joint_pos[i],
+            i,
+            time_now_for_clock
         )
         base_node.publish_odom(
-            env.env.scene["robot"].data.root_state_w[i, :3],
-            env.env.scene["robot"].data.root_state_w[i, 3:7],
+            env.unwrapped.scene["robot"].data.root_state_w[i, :3],
+            env.unwrapped.scene["robot"].data.root_state_w[i, 3:7],
             i,
             time_now_for_clock
         )
 
-    # ---------- 10 Hz LiDAR gate ----------
+    # --- NEW: Broadcast Arm End-Effector TF ---
+    if ee_pos is not None and ee_quat is not None:
+        ee_trans = TransformStamped()
+        ee_trans.header.stamp = time_now_for_clock
+        ee_trans.header.frame_id = "odom"
+        ee_trans.child_frame_id = "arm_camera_link"
+        
+        # Isaac provides arrays: pos [x,y,z], quat [w,x,y,z] in World Frame
+        px, py, pz = float(ee_pos[0]), float(ee_pos[1]), float(ee_pos[2])
+        qw, qx, qy, qz = float(ee_quat[0]), float(ee_quat[1]), float(ee_quat[2]), float(ee_quat[3])
+
+        # We must apply the same odom origin and nudge as the base
+        if 0 in base_node.odom_origins:
+            origin = base_node.odom_origins[0]
+            ee_rot = Rotation.from_quat([qx, qy, qz, qw])
+            R_rel = origin["rot"].inv() * ee_rot
+            
+            P_diff = np.array([px, py, pz]) - origin["pos"]
+            P_rel = origin["rot"].inv().apply(P_diff)
+            
+            px, py, pz = P_rel[0], P_rel[1], P_rel[2]
+            
+            final_quat = R_rel.as_quat() # [x, y, z, w]
+            qx, qy, qz, qw = final_quat[0], final_quat[1], final_quat[2], final_quat[3]
+
+        if hasattr(base_node, 'accumulated_nudge'):
+            px += base_node.accumulated_nudge[0]
+            py += base_node.accumulated_nudge[1]
+            pz += base_node.accumulated_nudge[2]
+
+        ee_trans.transform.translation.x = float(px)
+        ee_trans.transform.translation.y = float(py)
+        ee_trans.transform.translation.z = float(pz)
+        ee_trans.transform.rotation.w = float(qw)
+        ee_trans.transform.rotation.x = float(qx)
+        ee_trans.transform.rotation.y = float(qy)
+        ee_trans.transform.rotation.z = float(qz)
+        
+        base_node.broadcaster.sendTransform(ee_trans)
+
+    # ---------- 10 Hz IMU gate (Lidar runs on C++ OmniGraph now) ----------
     period = 0.1  
     now = time.monotonic()
     if now >= next_deadline:
-        burst_stamp = time_now_for_clock
-        try:
-            for j in range(num_envs):
-                data = annotator_lst[j].get_data()
-
-                if j == 0 and not hasattr(base_node, "_printed_lidar_schema"):
-                    base_node._printed_lidar_schema = True
-                    base_node.get_logger().info(
-                        f"LiDAR bundle keys: {list(data.keys())}, "
-                        f"data.shape: {np.asarray(data.get('data')).shape if 'data' in data else 'n/a'}"
-                    )
-
-                pts = _extract_points(data)
-                channels  = _extract_optional(data, "channel", "ring", "channels", "rings")
-                rel_time  = _extract_optional(data, "relative_time", "timestamps", "time")
-                intensity = _extract_optional(data, "intensity", "intensities", "reflectance")
-
-                point_cloud = update_meshes_for_cloud2(
-                    pts,
-                    env.env.scene["robot"].data.root_state_w[j, :3],
-                    env.env.scene["robot"].data.root_state_w[j, 3:7],
-                )
-
-                base_node._publish_imus()
-                publish_lidar(
-                    base_node, point_cloud, j, burst_stamp,
-                    channels=channels, rel_time=rel_time, intensity_arr=intensity
-                )
-
-        except Exception as e:
-            base_node.get_logger().warn(f"LiDAR burst skipped: {e}")
-
+        base_node._publish_imus(time_now_for_clock)
         next_deadline += period
         if now - next_deadline > period:
             next_deadline = now + period
@@ -371,19 +586,12 @@ class RobotBaseNode(Node):
         # Updated topic name and message type to String
         self.create_subscription(String, '/photo_request_str', self._photo_req_cb, 10)
 
-        try:
-            # Dynamically find the share directory for go2_control_cpp
-            pkg_share = get_package_share_directory('go2_control_cpp')
-            
-            # Construct path to config/Unitree_L1.json in the share directory
-            self.lidar_json_path = os.path.join(pkg_share, 'Unitree_L1.json')
-            
-            self.get_logger().info(f"Loading LiDAR config from: {self.lidar_json_path}")
-            
-        except Exception as e:
-            self.get_logger().error(f"Failed to resolve package path: {e}")
-            # Fallback for local testing if package isn't installed
-            self.lidar_json_path = "config/Unitree_L1.json"
+        import os
+        
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        self.lidar_json_path = os.path.join(
+            current_dir, "Isaac_sim", "Unitree", "Unitree_L1.json"
+        )
 
         self.lidar_cfg = load_lidar_json(self.lidar_json_path)
 
@@ -495,11 +703,10 @@ class RobotBaseNode(Node):
         self.accumulated_nudge += np.array([dx, dy, dz])
         self.get_logger().info(f"Odom Nudge: {self.accumulated_nudge}")
 
-    def _publish_imus(self):
+    def _publish_imus(self, time_msg):
         # ... (Unchanged) ...
-        now = self.get_clock().now()
-        now_ns = now.nanoseconds
-        robot = self.env.env.scene["robot"].data
+        now_ns = int(time_msg.sec * 1_000_000_000 + time_msg.nanosec)
+        robot = self.env.unwrapped.scene["robot"].data
         v_b = np.stack([robot.root_lin_vel_b[i, :].cpu().numpy() for i in range(self.num_envs)], axis=0)
 
         if self._last_time_ns is None:
@@ -514,7 +721,6 @@ class RobotBaseNode(Node):
         a_b = (v_b - self._last_lin_vel_b) / dt
         g_world = np.array([0.0, 0.0, -9.81])
 
-        time_msg = now.to_msg()
         for i in range(self.num_envs):
             q = robot.root_state_w[i, 3:7]
             R_wb = Rotation.from_quat([q[1].item(), q[2].item(), q[3].item(), q[0].item()])
@@ -529,10 +735,9 @@ class RobotBaseNode(Node):
         self._last_time_ns = now_ns
         self._last_lin_vel_b[:] = v_b
         
-    def publish_joints(self, joint_names_lst, joint_state_lst, robot_num):
-        # ... (Unchanged) ...
+    def publish_joints(self, joint_names_lst, joint_state_lst, robot_num, time_now):        # ... (Unchanged) ...
         joint_state = JointState()
-        joint_state.header.stamp = self.get_clock().now().to_msg()
+        joint_state.header.stamp = time_now
 
         joint_state_names_formated = []
         for joint_name in joint_names_lst:
@@ -557,17 +762,25 @@ class RobotBaseNode(Node):
         # This assumes base_rot is [w, x, y, z] based on context
         current_rot = Rotation.from_quat([base_rot[1].item(), base_rot[2].item(), base_rot[3].item(), base_rot[0].item()])
 
-        # --- Handle Reset Logic ---
-        if self._reset_odom_next_update:
-            # [MODIFIED] Force the new origin to be on the ground (Z=0) and flat (Identity Rotation).
-            # This prevents the odom frame from 'teleporting' up to the robot's height 
-            # or adopting the robot's pitch/roll.
-            self.odom_origins[robot_num] = {
-                'pos': np.array([current_pos[0], current_pos[1], 0.0]), # Only capture X, Y. Z is fixed to 0.
-                'rot': Rotation.identity()  # Enforce world-aligned (flat) frame, ignoring robot tilt.
-            }
+        # Convert robot base pose -> LiDAR/livox_frame pose.
+        # PointCloud2 is published in frame_id="livox_frame", so odom should track this frame.
+        lidar_pos = current_pos + current_rot.apply(LIVOX_OFFSET_BASE)
+        lidar_rot = current_rot
+
+        # --- Handle Odom Origin Logic ---
+        # At startup, make odom coincident with the robot base frame.
+        # On manual reset, re-zero odom to the current base frame again.
+        if self._reset_odom_next_update or robot_num not in self.odom_origins:
             
-            # Only clear the flag after the last robot is processed
+            # Remove pitch/roll from the odom origin but KEEP the original spawn height.
+            euler_zyx = current_rot.as_euler('zyx')
+            flat_rot = Rotation.from_euler('zyx', [euler_zyx[0], 0.0, 0.0])
+
+            self.odom_origins[robot_num] = {
+                "pos": current_pos.copy(),
+                "rot": flat_rot,
+            }
+
             if robot_num == self.num_envs - 1:
                 self._reset_odom_next_update = False
 
@@ -576,13 +789,13 @@ class RobotBaseNode(Node):
             origin = self.odom_origins[robot_num]
             
             # 1. Get rotation difference: R_rel = R_origin_inv * R_current
-            # Since origin is now Identity, R_rel is just the robot's true world rotation (preserving Pitch/Roll).
-            R_rel = origin['rot'].inv() * current_rot
+            # R_rel is the robot's rotation relative to its starting orientation.
+            R_rel = origin["rot"].inv() * lidar_rot
             
             # 2. Get translation difference in the Origin's frame
-            # Since origin Z is 0, this preserves the robot's true height above ground.
-            P_diff = current_pos - origin['pos']
-            P_rel = origin['rot'].inv().apply(P_diff)
+            # This preserves the lidar's true height above the robot base.
+            P_diff = lidar_pos - origin["pos"]
+            P_rel = origin["rot"].inv().apply(P_diff)
             
             # Update variables to be published
             final_pos = P_rel

@@ -5,7 +5,7 @@
 
 """
 Configuration classes defining the different terrains available. Each configuration class must
-inherit from ``omni.isaac.orbit.terrains.terrains_cfg.TerrainConfig`` and define the following attributes:
+inherit from ``omni.isaac.lab.terrains.terrains_cfg.TerrainConfig`` and define the following attributes:
 
 - ``name``: Name of the terrain. This is used for the prim name in the USD stage.
 - ``function``: Function to generate the terrain. This function must take as input the terrain difficulty
@@ -20,7 +20,8 @@ from collections.abc import Callable
 from dataclasses import MISSING
 from typing import Literal
 
-from omni.isaac.orbit.utils import configclass
+from isaaclab.utils import configclass
+from isaaclab.terrains import TerrainGenerator
 
 
 @configclass
@@ -30,7 +31,7 @@ class FlatPatchSamplingCfg:
     For a given sub-terrain, this configuration specifies how to sample flat patches on the terrain.
     The sampled flat patches can be used for spawning robots, targets, etc.
 
-    Please check the function :meth:`~omni.isaac.orbit.terrains.utils.find_flat_patches` for more details.
+    Please check the function :meth:`~omni.isaac.lab.terrains.utils.find_flat_patches` for more details.
     """
 
     num_patches: int = MISSING
@@ -104,6 +105,8 @@ class SubTerrainBaseCfg:
 class TerrainGeneratorCfg:
     """Configuration for the terrain generator."""
 
+    class_type: type = TerrainGenerator
+
     seed: int | None = None
     """The seed for the random number generator. Defaults to None,
     in which case the seed is not set."""
@@ -124,6 +127,9 @@ class TerrainGeneratorCfg:
 
     border_width: float = 0.0
     """The width of the border around the terrain (in m). Defaults to 0.0."""
+
+    border_height: float = 0.0
+    """The height of the border around the terrain (in m). Defaults to 0.0."""
 
     num_rows: int = 1
     """Number of rows of sub-terrains to generate. Defaults to 1."""
@@ -178,5 +184,5 @@ class TerrainGeneratorCfg:
     use_cache: bool = False
     """Whether to load the terrain from cache if it exists. Defaults to True."""
 
-    cache_dir: str = "/tmp/orbit/terrains"
-    """The directory where the terrain cache is stored. Defaults to "/tmp/orbit/terrains"."""
+    cache_dir: str = "/tmp/isaaclab/terrains"
+    """The directory where the terrain cache is stored. Defaults to "/tmp/isaaclab/terrains"."""

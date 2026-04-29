@@ -5,7 +5,7 @@ import numpy as np
 import trimesh
 import random
 from dataclasses import MISSING
-from omni.isaac.orbit.utils import configclass
+from isaaclab.utils import configclass
 from terrain_generator_cfg import SubTerrainBaseCfg
 
 @configclass

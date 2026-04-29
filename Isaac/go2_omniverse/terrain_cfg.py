@@ -2,7 +2,7 @@
 # ... (License header) ...
 
 from terrain_generator_cfg import TerrainGeneratorCfg
-import omni.isaac.orbit.terrains as terrain_gen
+import isaaclab.terrains as terrain_gen
 
 # --- IMPORT CONFIG AND FUNCTION ---
 from maze_terrain import MazeTerrainCfg, generate_maze_terrain

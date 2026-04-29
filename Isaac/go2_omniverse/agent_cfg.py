@@ -28,13 +28,20 @@ unitree_go2_agent_cfg = {
         'num_steps_per_env': 24, 
         'max_iterations': 15000, 
         'empirical_normalization': False, 
-        'policy': {
-            'class_name': 'ActorCritic', 
-            'init_noise_std': 1.0, 
-            'actor_hidden_dims': [512, 256, 128], 
-            'critic_hidden_dims': [512, 256, 128], 
-            'activation': 'elu'
-            }, 
+        'obs_groups': {
+            'actor': ['policy'],
+            'critic': ['policy'],
+        },
+        'actor': {
+            'class_name': 'MLPModel',
+            'hidden_dims': [512, 256, 128],
+            'activation': 'elu',
+        },
+        'critic': {
+            'class_name': 'MLPModel',
+            'hidden_dims': [512, 256, 128],
+            'activation': 'elu',
+        },
         'algorithm': {
             'class_name': 'PPO', 
             'value_loss_coef': 1.0, 
@@ -54,8 +61,8 @@ unitree_go2_agent_cfg = {
         'experiment_name': 'unitree_go2_rough', 
         'run_name': '', 
         'logger': 'tensorboard', 
-        'neptune_project': 'orbit', 
-        'wandb_project': 'orbit', 
+        'neptune_project': 'isaaclab', 
+        'wandb_project': 'isaaclab', 
         'resume': False, 
         'load_run': '.*', 
         'load_checkpoint': 'model_.*.pt'
@@ -68,13 +75,20 @@ unitree_g1_agent_cfg = {
         'num_steps_per_env': 24, 
         'max_iterations': 15000, 
         'empirical_normalization': False, 
-        'policy': {
-            'class_name': 'ActorCritic', 
-            'init_noise_std': 1.0, 
-            'actor_hidden_dims': [512, 256, 128], 
-            'critic_hidden_dims': [512, 256, 128], 
-            'activation': 'elu'
-            }, 
+        'obs_groups': {
+            'actor': ['policy'],
+            'critic': ['policy'],
+        },
+        'actor': {
+            'class_name': 'MLPModel',
+            'hidden_dims': [512, 256, 128],
+            'activation': 'elu',
+        },
+        'critic': {
+            'class_name': 'MLPModel',
+            'hidden_dims': [512, 256, 128],
+            'activation': 'elu',
+        },
         'algorithm': {
             'class_name': 'PPO', 
             'value_loss_coef': 1.0, 
@@ -94,9 +108,9 @@ unitree_g1_agent_cfg = {
         'experiment_name': 'g1_rough', 
         'run_name': '', 
         'logger': 'tensorboard', 
-        'neptune_project': 'orbit', 
-        'wandb_project': 'orbit', 
+        'neptune_project': 'isaaclab', 
+        'wandb_project': 'isaaclab', 
         'resume': False, 
         'load_run': '.*', 
-        'load_checkpoint': 'model_.*.pt'
+        'load_checkpoint': 'model_.*_converted.pt'
         }
