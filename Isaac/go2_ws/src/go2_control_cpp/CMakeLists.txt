@@ -323,6 +323,11 @@ install(
 )
 
 install(
+  DIRECTORY meshes
+  DESTINATION share/${PROJECT_NAME}
+)
+
+install(
   DIRECTORY glim_config/
   DESTINATION share/${PROJECT_NAME}/glim_config
 )
