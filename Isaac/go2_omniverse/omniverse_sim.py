@@ -826,6 +826,23 @@ def run_sim():
 
     # sensors + env USD
     annotator_lst = add_rtx_lidar(env_cfg.scene.num_envs, args_cli.robot, True)    
+    env.unwrapped.sim.reset()
+
+    # The reset above is needed for native Isaac sensor graphs, but it also
+    # runs the env reset event. Restore the maze start pose captured earlier.
+    robot.write_root_pose_to_sim(ROBOT_RESET_ROOT_POSE.clone())
+    robot.write_root_velocity_to_sim(torch.zeros_like(robot.data.root_state_w[:, 7:13]))
+    robot.write_joint_state_to_sim(
+        ROBOT_RESET_JOINT_POS.clone(),
+        torch.zeros_like(robot.data.default_joint_vel),
+    )
+    arm.write_root_pose_to_sim(ROBOT_RESET_ROOT_POSE.clone())
+    arm.write_root_velocity_to_sim(torch.zeros_like(robot.data.root_state_w[:, 7:13]))
+    arm.write_joint_state_to_sim(
+        ARM_RESET_JOINT_POS.clone(),
+        torch.zeros_like(arm.data.default_joint_vel),
+    )
+
     camera_lst = add_camera(env_cfg.scene.num_envs, args_cli.robot)
     add_ee_flashlight(env_cfg.scene.num_envs, args_cli.robot)
 

@@ -6,10 +6,12 @@ import time
 import numpy as np
 import cv2                 # OpenCV for video recording
 import os, json, math
+import importlib
 
 from rclpy.node import Node
 from rclpy.qos import QoSProfile
 from rclpy.duration import Duration
+from rcl_interfaces.msg import SetParametersResult
 
 # --- Message Imports ---
 from sensor_msgs.msg import JointState, PointCloud2, PointField, Imu
@@ -22,7 +24,7 @@ from tf2_ros.static_transform_broadcaster import StaticTransformBroadcaster
 from sensor_msgs_py import point_cloud2
 
 # --- Omniverse / Pixar Imports ---
-from pxr import Gf, UsdGeom
+from pxr import Gf, Sdf, UsdGeom
 import omni.usd
 import omni.timeline
 import carb
@@ -40,6 +42,9 @@ from builtin_interfaces.msg import Time as RosTime
 
 DISABLE_RING_AND_TIME = True    # fast mode
 LIVOX_OFFSET_BASE = np.array([0.3, 0.0, 0.25], dtype=float)
+NATIVE_IMU_TOPIC = "/livox/imu"
+NATIVE_IMU_FRAME_ID = "livox_frame"
+NATIVE_IMU_RATE_HZ = 100.0
 
 # Global references to prevent sensors from being garbage collected
 _lidars_keep_alive = []
@@ -221,6 +226,139 @@ def create_rtx_lidar_ros2_graph(robot_num, lidar_sensor, topic_name="/glim_rosno
         },
     )
 
+def _set_attr_if_present(prim, names, value):
+    for attr_name in names:
+        attr = prim.GetAttribute(attr_name)
+        if attr and attr.IsValid():
+            attr.Set(value)
+            print(f"[IMU][OVERRIDE] {attr_name} = {value}")
+            return True
+    return False
+
+
+def _set_graph_target(graph_path, node_name, input_name, target_path):
+    import omni.graph.core as og
+
+    attr = og.Controller.attribute(f"{graph_path}/{node_name}.inputs:{input_name}")
+    if attr is None:
+        raise RuntimeError(f"Missing OmniGraph target input: {node_name}.inputs:{input_name}")
+
+    try:
+        attr.set([Sdf.Path(target_path)])
+    except Exception:
+        attr.set([target_path])
+
+
+def _update_isaac_app_once():
+    try:
+        kit_app = importlib.import_module("omni.kit.app")
+        kit_app.get_app().update()
+    except Exception:
+        pass
+
+
+def create_native_imu_ros2_graph(robot_num, imu_prim_path, topic_name=NATIVE_IMU_TOPIC):
+    import omni.graph.core as og
+
+    keys = og.Controller.Keys
+    graph_path = f"/ROS_NATIVE_IMU_{robot_num}"
+
+    print(f"[IMU][ROS2] publishing native IMU on {topic_name} from {imu_prim_path}")
+
+    og.Controller.edit(
+        {
+            "graph_path": graph_path,
+            "evaluator_name": "execution",
+            "pipeline_stage": og.GraphPipelineStage.GRAPH_PIPELINE_STAGE_ONDEMAND,
+        },
+        {
+            keys.CREATE_NODES: [
+                ("OnPhysicsStep", "isaacsim.core.nodes.OnPhysicsStep"),
+                ("ROS2Context", "isaacsim.ros2.bridge.ROS2Context"),
+                ("ReadIMU", "isaacsim.sensors.physics.IsaacReadIMU"),
+                ("PublishIMU", "isaacsim.ros2.bridge.ROS2PublishImu"),
+            ],
+            keys.SET_VALUES: [
+                ("ReadIMU.inputs:readGravity", True),
+                ("ReadIMU.inputs:useLatestData", False),
+                ("PublishIMU.inputs:frameId", NATIVE_IMU_FRAME_ID),
+                ("PublishIMU.inputs:topicName", topic_name),
+                ("PublishIMU.inputs:nodeNamespace", ""),
+                ("PublishIMU.inputs:queueSize", 10),
+                ("PublishIMU.inputs:publishOrientation", True),
+                ("PublishIMU.inputs:publishLinearAcceleration", True),
+                ("PublishIMU.inputs:publishAngularVelocity", True),
+            ],
+            keys.CONNECT: [
+                ("OnPhysicsStep.outputs:step", "ReadIMU.inputs:execIn"),
+                ("ReadIMU.outputs:execOut", "PublishIMU.inputs:execIn"),
+                ("ROS2Context.outputs:context", "PublishIMU.inputs:context"),
+                ("ReadIMU.outputs:sensorTime", "PublishIMU.inputs:timeStamp"),
+                ("ReadIMU.outputs:orientation", "PublishIMU.inputs:orientation"),
+                ("ReadIMU.outputs:linAcc", "PublishIMU.inputs:linearAcceleration"),
+                ("ReadIMU.outputs:angVel", "PublishIMU.inputs:angularVelocity"),
+            ],
+        },
+    )
+
+    _set_graph_target(graph_path, "ReadIMU", "imuPrim", imu_prim_path)
+
+
+def add_native_imu(robot_num, parent_path, translation, orientation=(1.0, 0.0, 0.0, 0.0)):
+    import omni.kit.commands
+
+    imu_prim_path = f"{parent_path}/livox_imu"
+    stage = omni.usd.get_context().get_stage()
+    existing_prim = stage.GetPrimAtPath(imu_prim_path)
+
+    if not existing_prim or not existing_prim.IsValid():
+        success = False
+        imu_prim = None
+        command_kwargs = {
+            "path": "livox_imu",
+            "parent": parent_path,
+            "linear_acceleration_filter_size": 1,
+            "angular_velocity_filter_size": 1,
+            "orientation_filter_size": 1,
+            "translation": Gf.Vec3d(*translation),
+            "orientation": Gf.Quatd(*orientation),
+        }
+
+        command_name = "IsaacSensorCreateImuSensor"
+        try:
+            success, imu_prim = omni.kit.commands.execute(command_name, **command_kwargs)
+            if success:
+                print(f"[IMU][CREATE] {command_name} created {imu_prim_path}")
+        except Exception as e:
+            print(f"[IMU][CREATE][FAILED] {command_name}: {e}")
+
+        if not success:
+            raise RuntimeError(f"Failed to create native IMU sensor at {imu_prim_path}")
+    else:
+        imu_prim = existing_prim
+        print(f"[IMU][CREATE] Reusing existing IMU prim: {imu_prim_path}")
+
+    stage = omni.usd.get_context().get_stage()
+    imu_prim = stage.GetPrimAtPath(imu_prim_path)
+    if not imu_prim or not imu_prim.IsValid():
+        raise RuntimeError(f"Invalid IMU prim after creation: {imu_prim_path}")
+
+    sensor_period = 1.0 / NATIVE_IMU_RATE_HZ
+    _set_attr_if_present(
+        imu_prim,
+        (
+            "sensorPeriod",
+            "imuSensor:sensorPeriod",
+            "physxSensor:sensorPeriod",
+            "omni:sensor:Core:sensorPeriod",
+        ),
+        sensor_period,
+    )
+    _set_attr_if_present(imu_prim, ("enabled", "imuSensor:enabled", "physxSensor:enabled"), True)
+
+    create_native_imu_ros2_graph(robot_num, imu_prim_path, topic_name=NATIVE_IMU_TOPIC)
+    return imu_prim_path
+
 def add_rtx_lidar(num_envs, robot_type, debug=False):
     annotator_lst = []
     global _lidars_keep_alive
@@ -233,15 +371,20 @@ def add_rtx_lidar(num_envs, robot_type, debug=False):
 
     settings = carb.settings.get_settings()
     settings.set_bool("/app/sensors/nv/lidar/outputBufferOnGPU", True)
-    omni.timeline.get_timeline_interface().play()
+    timeline = omni.timeline.get_timeline_interface()
+    if not timeline.is_playing():
+        timeline.play()
+        _update_isaac_app_once()
     config_name = "Example_Rotary"
 
     for i in range(num_envs):
         if robot_type == "g1":
-            lidar_prim_path = f"/World/envs/env_{i}/Robot/head_link/lidar_sensor"
+            sensor_parent_path = f"/World/envs/env_{i}/Robot/head_link"
+            lidar_prim_path = f"{sensor_parent_path}/lidar_sensor"
             lidar_translation = (0.0, 0.0, 0.0)
         else:
-            lidar_prim_path = f"/World/envs/env_{i}/Robot/base/lidar_sensor"
+            sensor_parent_path = f"/World/envs/env_{i}/Robot/base"
+            lidar_prim_path = f"{sensor_parent_path}/lidar_sensor"
             lidar_translation = tuple(LIVOX_OFFSET_BASE)
 
         lidar_sensor = LidarRtx(
@@ -312,6 +455,7 @@ def add_rtx_lidar(num_envs, robot_type, debug=False):
             elev_attr.Set(all_elev)
 
         create_rtx_lidar_ros2_graph(i, lidar_sensor, topic_name="/glim_rosnode/points")
+        add_native_imu(i, sensor_parent_path, lidar_translation)
         
         _lidar_render_products.append(lidar_sensor.get_render_product_path())
 
@@ -537,15 +681,6 @@ def pub_robo_data_ros2(robot_type, num_envs, base_node, env, annotator_lst, next
         
         base_node.broadcaster.sendTransform(ee_trans)
 
-    # ---------- 10 Hz IMU gate (Lidar runs on C++ OmniGraph now) ----------
-    period = 0.1  
-    now = time.monotonic()
-    if now >= next_deadline:
-        base_node._publish_imus(time_now_for_clock)
-        next_deadline += period
-        if now - next_deadline > period:
-            next_deadline = now + period
-
     return next_deadline
 
 
@@ -555,9 +690,12 @@ class RobotBaseNode(Node):
         qos_profile = QoSProfile(depth=10)
 
         self.declare_parameter("lidar.include_extra_fields", True)
+        self.declare_parameter("publish_map_odom", True)
+        self.publish_map_odom = bool(self.get_parameter("publish_map_odom").value)
 
         self.env = env
         self.num_envs = num_envs
+        self.qos_profile = qos_profile
 
         self._last_lin_vel_b = np.zeros((num_envs, 3), dtype=float)
         self._last_time_ns = None
@@ -612,13 +750,46 @@ class RobotBaseNode(Node):
         for i in range(num_envs):
             self.joint_pub.append(self.create_publisher(JointState, '/joint_states', qos_profile))
             self.go2_lidar_pub.append(self.create_publisher(PointCloud2, '/glim_rosnode/points', qos_profile))
-            self.odom_pub.append(self.create_publisher(Odometry, 'odom', qos_profile))
-            self.imu_pub.append(self.create_publisher(Imu, '/livox/imu', qos_profile))
+        if self.publish_map_odom:
+            self._ensure_odom_publishers()
         self.broadcaster= TransformBroadcaster(self, qos=qos_profile)
 
         self.static_broadcaster = StaticTransformBroadcaster(self)
 
-        self._publish_static_map_odom()
+        if self.publish_map_odom:
+            self._publish_static_map_odom()
+        self.add_on_set_parameters_callback(self._on_set_parameters)
+
+    def _ensure_odom_publishers(self):
+        while len(self.odom_pub) < self.num_envs:
+            self.odom_pub.append(self.create_publisher(Odometry, 'odom', self.qos_profile))
+
+    def _destroy_odom_publishers(self):
+        for publisher in self.odom_pub:
+            self.destroy_publisher(publisher)
+        self.odom_pub.clear()
+
+    def _reset_static_broadcaster(self):
+        try:
+            self.destroy_publisher(self.static_broadcaster.pub_tf)
+        except Exception as exc:
+            self.get_logger().warn(f"Failed to reset static TF publisher: {exc}")
+        self.static_broadcaster = StaticTransformBroadcaster(self)
+
+    def _on_set_parameters(self, parameters):
+        for param in parameters:
+            if param.name != "publish_map_odom":
+                continue
+            self.publish_map_odom = bool(param.value)
+            if self.publish_map_odom:
+                self._ensure_odom_publishers()
+                self._publish_static_map_odom()
+                self.get_logger().info("Enabled sim odom/map TF publishing")
+            else:
+                self._destroy_odom_publishers()
+                self._reset_static_broadcaster()
+                self.get_logger().info("Disabled sim odom/map TF publishing")
+        return SetParametersResult(successful=True)
     
     def _arm_cmd_cb(self, msg):
         """Stores incoming ROS 2 Cartesian pose targets for the arm (relative to base)."""
@@ -635,6 +806,9 @@ class RobotBaseNode(Node):
 
     # --- NEW: Helper method to publish the static transform ---
     def _publish_static_map_odom(self):
+        if not self.publish_map_odom:
+            return
+
         tf_map_odom = TransformStamped()
         tf_map_odom.header.stamp = self.get_clock().now().to_msg()
         # Standard ROS REP-105: map is parent, odom is child
@@ -815,6 +989,9 @@ class RobotBaseNode(Node):
         py += self.accumulated_nudge[1]
         pz += self.accumulated_nudge[2]
 
+        if not self.publish_map_odom:
+            return
+
         # --- Publish (Updated with calculated values) ---
         odom_trans = TransformStamped()
         odom_trans.header.stamp = time_now
@@ -843,6 +1020,9 @@ class RobotBaseNode(Node):
         self.odom_pub[robot_num].publish(odom_topic)
 
     def publish_imu(self, base_rot_wxyz, accel_specific_b, ang_vel_b, robot_num, time_now):
+        if robot_num >= len(self.imu_pub):
+            return
+
         # ... (Unchanged) ...
         try:
             q_w = float(getattr(base_rot_wxyz[0], "item", lambda: base_rot_wxyz[0])())
