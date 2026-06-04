@@ -3,8 +3,55 @@ set -e
 
 cd ~/Rescue/Isaac/go2_omniverse
 
-eval "$(conda shell.bash hook)"
-conda activate env_isaaclab
+CONDA_ENV_NAME="${ISAAC_SIM_CONDA_ENV:-env_isaaclab}"
+
+# Locate a conda installation even when `conda` isn't on PATH (e.g. when this
+# script is launched from a non-interactive shell such as the map web Dev tab).
+find_conda_base() {
+  if [ -n "${CONDA_EXE:-}" ] && [ -x "$CONDA_EXE" ]; then
+    dirname "$(dirname "$CONDA_EXE")"
+    return 0
+  fi
+
+  for candidate in \
+    "$HOME/miniconda3" \
+    "$HOME/anaconda3" \
+    "/opt/conda" \
+    "/usr/local/miniconda3" \
+    "/usr/local/anaconda3"; do
+    if [ -x "$candidate/bin/conda" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  if command -v conda >/dev/null 2>&1; then
+    dirname "$(dirname "$(command -v conda)")"
+    return 0
+  fi
+
+  return 1
+}
+
+activate_conda_env() {
+  local conda_base
+  if ! conda_base="$(find_conda_base)"; then
+    echo "[run_sim] Conda is not available. Install Miniconda or set CONDA_EXE/ISAAC_SIM_CONDA_ENV." >&2
+    return 127
+  fi
+
+  if [ -f "$conda_base/etc/profile.d/conda.sh" ]; then
+    # shellcheck disable=SC1090
+    . "$conda_base/etc/profile.d/conda.sh"
+  else
+    export PATH="$conda_base/bin:$PATH"
+    eval "$("$conda_base/bin/conda" shell.bash hook)"
+  fi
+
+  conda activate "$CONDA_ENV_NAME"
+}
+
+activate_conda_env
 
 # Prevent system ROS Python 3.10 paths leaking into Isaac Sim's Python 3.11
 unset PYTHONPATH
