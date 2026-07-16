@@ -47,14 +47,14 @@ def create_front_cam_omnigraph(robot_num):
 
             keys.SET_VALUES: [
                 # --- UPDATED: Point to the new arm-mounted camera path ---
-                ("IsaacCreateRenderProduct.inputs:cameraPrim", f"/World/envs/env_{robot_num}/Arm/link06/front_cam"),
+                ("IsaacCreateRenderProduct.inputs:cameraPrim", f"/World/envs/env_{robot_num}/Arm/Link6/front_cam"),
                 ("IsaacCreateRenderProduct.inputs:enabled", True),
                 ("ROS2CameraHelper.inputs:type", "rgb"),
                 ("ROS2CameraHelper.inputs:topicName", f"robot{robot_num}/front_cam/rgb"),
                 
                 # NOTE: Depending on your ROS TF tree, you may also want to update the frameId 
                 # so that ROS knows this image originates from the arm's end-effector. 
-                # If "robot{robot_num}" works for your current setup, leave it. Otherwise, change to something like "link06".
+                # If "robot{robot_num}" works for your current setup, leave it. Otherwise, change to something like "Link6".
                 ("ROS2CameraHelper.inputs:frameId", f"robot{robot_num}"),
             ],
 

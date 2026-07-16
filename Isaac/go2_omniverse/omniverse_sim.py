@@ -20,6 +20,8 @@ parser.add_argument("--custom_env", type=str, default="office", help="Setup the 
 parser.add_argument("--robot", type=str, default="go2", help="Setup the robot")
 parser.add_argument("--terrain", type=str, default="rough", help="Setup the robot")
 parser.add_argument("--robot_amount", type=int, default=1, help="Setup the robot amount")
+parser.add_argument("--d1_domain_id", type=int, default=0,
+                    help="DDS domain for the D1 arm interface (the real arm uses 0).")
 
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
@@ -105,14 +107,42 @@ ARM_RESET_JOINT_POS = None
 ROBOT_START_POS = [6.2, 6.2, 0.42]
 ROBOT_START_ROT = [1.0, 0.0, 0.0, 0.0]
 
+# Orientation of the D1's Link6 frame when the arm is at its zero pose: a 90 deg
+# rotation about Y, which points the gripper's approach axis along base +X.
+# This is NOT identity -- the Z1 this replaced had a different frame convention,
+# and asking the D1's wrist for identity drives Joint5 into its limit and leaves
+# the IK ~13 cm short. Treat this as "pointing straight ahead" and compose yaw
+# on top of it rather than using a bare yaw quaternion.
+D1_EE_REST_ROT = [0.70710678, 0.0, 0.70710678, 0.0]
+
+# Height of the arm's base above the robot root (see the pinning offset below).
+ARM_MOUNT_Z = 0.08
+
 # Default arm IK target, relative to robot base/root frame.
 DEFAULT_ARM_TELEOP_POS = [0.3, 0.0, 0.4]
-DEFAULT_ARM_TELEOP_ROT = [1.0, 0.0, 0.0, 0.0]
+DEFAULT_ARM_TELEOP_ROT = list(D1_EE_REST_ROT)
 
 ARM_TELEOP_ACTIVE = True
 ARM_TELEOP_POS = DEFAULT_ARM_TELEOP_POS.copy()
 ARM_TELEOP_ROT = DEFAULT_ARM_TELEOP_ROT.copy()
 ARM_TELEOP_YAW = 0.0
+
+# The D1-550 reaches 550 mm, noticeably shorter than the Z1 this replaced.
+ARM_MAX_REACH = 0.55
+
+# Gripper jaw opening in millimetres, as the D1 protocol expresses it.
+GRIPPER_TELEOP_MM = 0.0
+GRIPPER_STEP_MM = 5.0
+
+# The D1's own arm-side interface, and our client onto it.
+_D1_SERVER = None
+_D1_CLIENT = None
+_D1_CONTROLLER = None
+_D1_ARM_JOINT_IDS = None
+_D1_GRIPPER_IDS = None
+
+# Set by the keyboard thread, consumed by the sim loop (which owns the tensors).
+ARM_RESUME_REQUESTED = False
 
 from isaacsim.core.utils.viewports import set_camera_view
 
@@ -120,8 +150,138 @@ import numpy as np
 
 import os
 
-from isaaclab.controllers import DifferentialIKController, DifferentialIKControllerCfg
-from isaaclab.utils.math import quat_apply, quat_mul
+from d1_sdk import D1Arm, D1SimServer, protocol as d1
+from d1_ik_controller import D1CartesianController, IsaacKinematics
+
+D1_JOINT_NAMES = d1.JOINT_NAMES            # Joint1..Joint6 (protocol ids 0..5)
+D1_GRIPPER_JOINTS = d1.GRIPPER_JOINT_NAMES  # Joint7_1 / Joint7_2
+
+# Drive gains at full damping. The arm scales these down as the D1 damping
+# command is lowered, so `set_all_damping(0)` goes limp for drag teaching.
+# The jaws are a small, stiff prismatic pair and need far less than the arm;
+# these must stay separate or re-writing gains would stiffen them 4x.
+ARM_BASE_STIFFNESS = 800.0
+ARM_BASE_DAMPING = 80.0
+GRIPPER_BASE_STIFFNESS = 200.0
+GRIPPER_BASE_DAMPING = 20.0
+
+_RAD2DEG = 180.0 / np.pi
+_DEG2RAD = np.pi / 180.0
+
+
+def quat_mul_wxyz(a, b):
+    """Hamilton product of two (w, x, y, z) quaternions, as plain lists.
+
+    The teleop layer runs on the keyboard thread and works in lists, not torch
+    tensors, so this stays independent of the sim's math helpers.
+    """
+    aw, ax, ay, az = a
+    bw, bx, by, bz = b
+    return [
+        aw * bw - ax * bx - ay * by - az * bz,
+        aw * bx + ax * bw + ay * bz - az * by,
+        aw * by - ax * bz + ay * bw + az * bx,
+        aw * bz + ax * by - ay * bx + az * bw,
+    ]
+
+
+def gripper_mm_to_finger_m(stroke_mm):
+    """Jaw opening (mm, as the protocol speaks) -> per-finger travel (m).
+
+    The two fingers mirror each other, so each covers half the opening. The
+    protocol advertises 65 mm but this URDF's fingers travel 30 mm each, so a
+    full-open command saturates at 60 mm of real jaw.
+    """
+    half_m = (stroke_mm / 2.0) / 1000.0
+    return min(half_m, d1.GRIPPER_FINGER_TRAVEL_M)
+
+
+def finger_m_to_gripper_mm(finger_m):
+    """Per-finger travel (m) -> jaw opening (mm). Inverse of the above."""
+    return abs(finger_m) * 2.0 * 1000.0
+
+
+def apply_d1_targets(arm, server, arm_joint_ids, gripper_ids, device):
+    """Drive the simulated joints from the arm's commanded targets.
+
+    This is the seam between the D1 protocol and PhysX: everything upstream of
+    here speaks degrees and millimetres over DDS, everything downstream is
+    radians and metres.
+    """
+    targets_deg, gripper_mm = server.get_targets()
+
+    joint_targets = torch.tensor(
+        [[a * _DEG2RAD for a in targets_deg]], device=device, dtype=torch.float32
+    ).repeat(arm.num_instances, 1)
+    arm.set_joint_position_target(joint_targets, joint_ids=arm_joint_ids)
+
+    # Joint7_1 opens positive, Joint7_2 negative -- the URDF mirrors them.
+    finger = gripper_mm_to_finger_m(gripper_mm)
+    gripper_targets = torch.tensor(
+        [[finger, -finger]], device=device, dtype=torch.float32
+    ).repeat(arm.num_instances, 1)
+    arm.set_joint_position_target(gripper_targets, joint_ids=gripper_ids)
+
+
+def report_d1_state(arm, server, arm_joint_ids, gripper_ids):
+    """Publish the simulated encoders back out over the D1 protocol."""
+    measured_rad = arm.data.joint_pos[0, arm_joint_ids].detach().cpu().numpy()
+    finger_m = float(arm.data.joint_pos[0, gripper_ids[0]].detach().cpu())
+    server.set_measured(
+        [float(a) * _RAD2DEG for a in measured_rad],
+        finger_m_to_gripper_mm(finger_m),
+    )
+
+
+def apply_d1_actuation(arm, server, arm_joint_ids, gripper_ids, device, state):
+    """Reflect motor power and damping in the physics drives.
+
+    The D1's damping command is a 0..80000 range, not a switch: 0 releases a
+    joint for drag teaching and 80000 locks it. Cutting motor power is the
+    e-stop. Both scale the drive gains here, down to zero when unpowered.
+
+    Caveat: releasing the gains does NOT make the arm visibly sag. The arm's
+    root is teleported onto the robot every step to keep it mounted, which
+    resets the articulation's velocity each tick, so the joints never build up
+    any falling motion. The command, the reported status and the drive gains are
+    all faithful; the mechanical consequence of going limp is not modelled.
+
+    Only writes on change -- these are stage writes, not per-tick work.
+    """
+    powered = server.is_powered()
+    damping = server.get_damping()
+    key = (powered, tuple(damping))
+    if state.get("key") == key:
+        return
+    state["key"] = key
+
+    ids = list(arm_joint_ids) + list(gripper_ids)
+    # Each joint keeps its own base gains; damping only scales them. Both
+    # fingers follow the gripper's servo id.
+    scales = [damping[i] / d1.DAMPING_LOCKED for i in range(d1.NUM_ARM_JOINTS)]
+    scales += [damping[d1.GRIPPER_ID] / d1.DAMPING_LOCKED] * len(gripper_ids)
+    base_stiff = [ARM_BASE_STIFFNESS] * len(arm_joint_ids) + [
+        GRIPPER_BASE_STIFFNESS
+    ] * len(gripper_ids)
+    base_damp = [ARM_BASE_DAMPING] * len(arm_joint_ids) + [
+        GRIPPER_BASE_DAMPING
+    ] * len(gripper_ids)
+    if not powered:
+        scales = [0.0] * len(scales)
+
+    stiff = torch.tensor(
+        [[b * s for b, s in zip(base_stiff, scales)]], device=device, dtype=torch.float32
+    ).repeat(arm.num_instances, 1)
+    damp = torch.tensor(
+        [[b * s for b, s in zip(base_damp, scales)]], device=device, dtype=torch.float32
+    ).repeat(arm.num_instances, 1)
+    arm.write_joint_stiffness_to_sim(stiff, joint_ids=ids)
+    arm.write_joint_damping_to_sim(damp, joint_ids=ids)
+
+    if not powered:
+        print("[D1] Motor power OFF (e-stop): drive gains released. The arm will "
+              "stop holding its target but will not sag -- its root is pinned.")
+
 
 def generate_arm_usd():
     """Converts the URDF to a USD file and returns the path."""
@@ -141,9 +301,9 @@ def generate_arm_usd():
     import_config.fix_base = False 
     import_config.make_default_prim = True 
     
-    project_root = os.path.dirname(os.path.abspath(__file__)) 
-    urdf_path = os.path.join(project_root, "z1_arm", "z1.urdf")
-    dest_usd_path = os.path.join(project_root, "z1_arm", "z1.usd")
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    urdf_path = os.path.join(project_root, "d1_arm", "d1.urdf")
+    dest_usd_path = os.path.join(project_root, "d1_arm", "d1.usd")
     
     if os.path.exists(dest_usd_path):
         os.remove(dest_usd_path)
@@ -437,16 +597,15 @@ def _arrow_dir_pressed(dir_name: str):
         _ARROW_CUR_STEP = WH_STEP_M
     return _ARROW_CUR_STEP
 
-def reset_robot_and_arm(env, current_rel_pos, current_rel_rot, diff_ik_controller=None):
+def reset_robot_and_arm(env, d1_controller=None):
     """Teleport robot back to start and reset arm IK target/state."""
     global RESET_REQUESTED
     global ARM_TELEOP_ACTIVE, ARM_TELEOP_POS, ARM_TELEOP_ROT, ARM_TELEOP_YAW
     global ROBOT_RESET_ROOT_POSE, ROBOT_RESET_JOINT_POS, ARM_RESET_JOINT_POS
+    global GRIPPER_TELEOP_MM
 
     robot = env.unwrapped.scene["robot"]
     arm = env.unwrapped.scene["arm"]
-    device = env.unwrapped.device
-    num_envs = robot.data.root_state_w.shape[0]
 
     # ---------------- Robot root pose ----------------
     if ROBOT_RESET_ROOT_POSE is not None:
@@ -496,32 +655,14 @@ def reset_robot_and_arm(env, current_rel_pos, current_rel_rot, diff_ik_controlle
             _ROS_NODE_REF.trigger_odom_reset()
 
     # Reset the smoothed IK target so the arm moves back to default cleanly.
-    default_pos = torch.tensor(
-        DEFAULT_ARM_TELEOP_POS,
-        device=device,
-        dtype=torch.float32,
-    ).repeat(num_envs, 1)
-
-    default_rot = torch.tensor(
-        DEFAULT_ARM_TELEOP_ROT,
-        device=device,
-        dtype=torch.float32,
-    ).repeat(num_envs, 1)
-
-    current_rel_pos[:] = default_pos
-    current_rel_rot[:] = default_rot
-
-    if diff_ik_controller is not None:
-        try:
-            diff_ik_controller.reset()
-        except Exception:
-            pass
+    if d1_controller is not None:
+        d1_controller.reset(DEFAULT_ARM_TELEOP_POS, DEFAULT_ARM_TELEOP_ROT)
 
     # Also pin the arm root immediately to the reset robot pose.
     arm.write_root_pose_to_sim(root_pose)
     arm.write_root_velocity_to_sim(torch.zeros_like(root_vel))
 
-    # Reset the actual Z1 arm joints too.
+    # Reset the actual D1 arm joints too.
     if ARM_RESET_JOINT_POS is not None:
         arm_joint_pos = ARM_RESET_JOINT_POS.clone()
     else:
@@ -529,6 +670,16 @@ def reset_robot_and_arm(env, current_rel_pos, current_rel_rot, diff_ik_controlle
 
     arm_joint_vel = torch.zeros_like(arm.data.default_joint_vel)
     arm.write_joint_state_to_sim(arm_joint_pos, arm_joint_vel)
+
+    # Teleporting the joints does not tell the arm's controller about it. Re-arm
+    # its targets from the new state, or it will lunge back to the stale one.
+    # write_joint_state_to_sim has already refreshed arm.data, so this reads the
+    # pose we just teleported to rather than assuming it.
+    GRIPPER_TELEOP_MM = 0.0
+    if _D1_SERVER is not None and _D1_ARM_JOINT_IDS is not None:
+        report_d1_state(arm, _D1_SERVER, _D1_ARM_JOINT_IDS, _D1_GRIPPER_IDS)
+        _D1_SERVER.sync_targets_to_measured()
+        _D1_SERVER.restore_power()  # clear any e-stop left over from before the reset
 
     reset_xyz = root_pose[0, :3].detach().cpu().numpy()
     print(
@@ -540,10 +691,18 @@ def reset_robot_and_arm(env, current_rel_pos, current_rel_rot, diff_ik_controlle
     RESET_REQUESTED = False
 
 # ===================== Keyboard Handling =====================
+# Arm keys, all routed through the D1 API so they exercise the same path the
+# real arm would:
+#   arrows / 1 / 0 : move the Cartesian IK target (x, y, then z)
+#   , / .          : close / open the gripper (5 mm per press, 0-65 mm)
+#   Z              : return to zero pose (suspends IK; any arm key re-engages)
+#   P              : toggle motor power (e-stop)
+#   R              : reset robot + arm
 def sub_keyboard_event(event, *args, **kwargs) -> bool:
     # Add ARM_TELEOP_YAW to the globals list here
     global ARM_TELEOP_ACTIVE, ARM_TELEOP_POS, ARM_TELEOP_ROT, ARM_TELEOP_YAW, RESET_REQUESTED
-    speed = 1.0 
+    global GRIPPER_TELEOP_MM, ARM_RESUME_REQUESTED
+    speed = 1.0
 
     if event.type in (carb.input.KeyboardEventType.KEY_PRESS, carb.input.KeyboardEventType.KEY_REPEAT):
 
@@ -558,11 +717,44 @@ def sub_keyboard_event(event, *args, **kwargs) -> bool:
             toggle_lidar_debug_draw()
             return True
         
-        # -------- Arrow keys & 1/0: Z1 Arm Teleoperation ----------
+        # -------- , / . : D1 gripper ----------
+        # Reads as < / > for close / open. Not G/H: H is Isaac's own hide
+        # shortcut and firing both raises a warning in the viewport.
+        # Sent straight through the D1 API, so these keys drive a real arm too.
+        if event.input.name in ('COMMA', 'PERIOD'):
+            if _D1_CLIENT is None:
+                return True
+            step = -GRIPPER_STEP_MM if event.input.name == 'COMMA' else GRIPPER_STEP_MM
+            GRIPPER_TELEOP_MM = float(
+                np.clip(GRIPPER_TELEOP_MM + step, 0.0, d1.GRIPPER_STROKE_MM)
+            )
+            _D1_CLIENT.set_gripper(GRIPPER_TELEOP_MM)
+            print(f"[D1] Gripper -> {GRIPPER_TELEOP_MM:.1f} mm")
+            return True
+
+        # -------- P: motor power / e-stop toggle ----------
+        if event.input.name == 'P':
+            if _D1_CLIENT is not None and _D1_SERVER is not None:
+                _D1_CLIENT.set_motor_power(not _D1_SERVER.is_powered())
+            return True
+
+        # -------- Z: return to zero pose ----------
+        # The Cartesian loop must stand down first: it rewrites every joint at
+        # 10 Hz and would overwrite the homing command before the arm moved.
+        # Any arm key re-engages it from wherever the arm ended up.
+        if event.input.name == 'Z':
+            if _D1_CLIENT is not None and _D1_CONTROLLER is not None:
+                _D1_CONTROLLER.suspend()
+                _D1_CLIENT.return_to_zero()
+                print("[D1] Return-to-zero commanded; IK suspended "
+                      "(press an arm key to re-engage).")
+            return True
+
+        # -------- Arrow keys & 1/0: D1 Arm Teleoperation ----------
         is_arm_key = False
         arm_step = 0.02 # Meters to move per keypress
         target_yaw = None
-        
+
         if event.input.name == 'UP':
             ARM_TELEOP_POS[0] += arm_step
             target_yaw = 0.0
@@ -579,16 +771,25 @@ def sub_keyboard_event(event, *args, **kwargs) -> bool:
             ARM_TELEOP_POS[1] -= arm_step
             target_yaw = -np.pi / 2.0
             is_arm_key = True
-        elif event.input.name in ['1', 'NUMPAD_1']:
+        # carb names the top-row digits KEY_1/KEY_0, not '1'/'0' -- matching on
+        # the bare digit silently limited these to the numpad.
+        elif event.input.name in ['KEY_1', 'NUMPAD_1']:
             ARM_TELEOP_POS[2] += arm_step
             is_arm_key = True
-        elif event.input.name in ['0', 'NUMPAD_0']:
+        elif event.input.name in ['KEY_0', 'NUMPAD_0']:
             ARM_TELEOP_POS[2] -= arm_step
             is_arm_key = True
             
         if is_arm_key:
             ARM_TELEOP_ACTIVE = True
-            
+
+            # Re-engaging after a suspend has to resync to the arm's real pose
+            # first; the sim loop does that, so this press only wakes it up.
+            if _D1_CONTROLLER is not None and _D1_CONTROLLER.is_suspended:
+                ARM_RESUME_REQUESTED = True
+                print("[D1] Re-engaging IK from the arm's current pose.")
+                return True
+
             # --- UPDATE YAW (LINEAR DAMPENING) ---
             if target_yaw is not None:
                 # Find the shortest angular distance to the target direction
@@ -604,12 +805,15 @@ def sub_keyboard_event(event, *args, **kwargs) -> bool:
                 
                 # Apply the dampened step
                 ARM_TELEOP_YAW += step_rad
-                    
-                # Convert the incrementally updated yaw back to a quaternion
-                ARM_TELEOP_ROT[0] = float(np.cos(ARM_TELEOP_YAW / 2.0)) # w
-                ARM_TELEOP_ROT[1] = 0.0                                 # x 
-                ARM_TELEOP_ROT[2] = 0.0                                 # y 
-                ARM_TELEOP_ROT[3] = float(np.sin(ARM_TELEOP_YAW / 2.0)) # z
+
+                # Yaw about the robot's Z, composed onto the D1's rest
+                # orientation. A bare yaw quaternion would command identity at
+                # yaw=0, which this wrist cannot reach.
+                yaw_q = [
+                    float(np.cos(ARM_TELEOP_YAW / 2.0)), 0.0, 0.0,
+                    float(np.sin(ARM_TELEOP_YAW / 2.0)),
+                ]
+                ARM_TELEOP_ROT[:] = quat_mul_wxyz(yaw_q, D1_EE_REST_ROT)
                 
             # --- SAFEGUARDS ---
             # 1. Floor & Robot Body Z-limit (Don't dig into the dog)
@@ -622,12 +826,18 @@ def sub_keyboard_event(event, *args, **kwargs) -> bool:
                     ARM_TELEOP_POS[2] = 0.2
                     
             # 3. Max reach (Prevent IK singularities / stretching beyond hardware limits)
-            dist = np.sqrt(ARM_TELEOP_POS[0]**2 + ARM_TELEOP_POS[1]**2 + ARM_TELEOP_POS[2]**2)
-            max_reach = 0.6
+            # Reach is measured from the arm's own base, which sits ARM_MOUNT_Z
+            # above the robot root -- not from the root itself.
+            dx = ARM_TELEOP_POS[0]
+            dy = ARM_TELEOP_POS[1]
+            dz = ARM_TELEOP_POS[2] - ARM_MOUNT_Z
+            dist = np.sqrt(dx * dx + dy * dy + dz * dz)
+            max_reach = ARM_MAX_REACH
             if dist > max_reach:
-                ARM_TELEOP_POS[0] *= (max_reach / dist)
-                ARM_TELEOP_POS[1] *= (max_reach / dist)
-                ARM_TELEOP_POS[2] *= (max_reach / dist)
+                scale = max_reach / dist
+                ARM_TELEOP_POS[0] = dx * scale
+                ARM_TELEOP_POS[1] = dy * scale
+                ARM_TELEOP_POS[2] = ARM_MOUNT_Z + dz * scale
 
             # --- DEBUG: Print the bounded target position AND yaw ---
             yaw_deg = np.degrees(ARM_TELEOP_YAW)
@@ -721,7 +931,7 @@ def run_sim():
     global _ENV_REF
     global _ROS_NODE_REF
     global RESET_REQUESTED
-    global ARM_TELEOP_POS, ARM_TELEOP_ROT, ARM_TELEOP_YAW
+    global ARM_TELEOP_POS, ARM_TELEOP_ROT, ARM_TELEOP_YAW, ARM_RESUME_REQUESTED
     # subscribe to keyboard
     _input = carb.input.acquire_input_interface()
     _appwindow = omni.appwindow.get_default_app_window()
@@ -734,13 +944,15 @@ def run_sim():
         env_cfg = G1RoughEnvCfg()
     env_cfg.scene.num_envs = args_cli.robot_amount
 
-    # --- NEW: NATIVE ORBIT ARM INTEGRATION ---
+    # --- NATIVE ORBIT ARM INTEGRATION (Unitree D1) ---
     dest_usd_path = generate_arm_usd()
-    
+
     from isaaclab.assets import ArticulationCfg
     from isaaclab.actuators import ImplicitActuatorCfg
-    
-    # We natively inject the arm into the Orbit configuration
+
+    # We natively inject the arm into the Orbit configuration.
+    # Start folded at the arm's own zero pose -- the same configuration the real
+    # D1 homes to on `return_to_zero`.
     env_cfg.scene.arm = ArticulationCfg(
         prim_path="{ENV_REGEX_NS}/Arm",
         spawn=sim_utils.UsdFileCfg(
@@ -749,33 +961,25 @@ def run_sim():
         init_state=ArticulationCfg.InitialStateCfg(
             pos=(7.2, 7.2, 0.42),
             rot=(1.0, 0.0, 0.0, 0.0),
-            joint_pos={
-                "joint1": 0.0,
-                "joint2": 0.7,
-                "joint3": -1.2,
-                "joint4": 0.0,
-                "joint5": 0.8,
-                "joint6": 0.0,
-            },
-            joint_vel={
-                "joint1": 0.0,
-                "joint2": 0.0,
-                "joint3": 0.0,
-                "joint4": 0.0,
-                "joint5": 0.0,
-                "joint6": 0.0,
-            },
+            joint_pos={name: 0.0 for name in D1_JOINT_NAMES + D1_GRIPPER_JOINTS},
+            joint_vel={name: 0.0 for name in D1_JOINT_NAMES + D1_GRIPPER_JOINTS},
         ),
         actuators={
+            # J1-J3 carry the load (3.33 Nm); the wrist joints are lighter.
             "arm_motors": ImplicitActuatorCfg(
-                joint_names_expr=[".*"],
-                stiffness=800.0,
-                damping=80.0,
+                joint_names_expr=["Joint[1-6]"],
+                stiffness=ARM_BASE_STIFFNESS,
+                damping=ARM_BASE_DAMPING,
+            ),
+            # The jaws are a small, stiff prismatic pair; they need far less.
+            "gripper": ImplicitActuatorCfg(
+                joint_names_expr=["Joint7_.*"],
+                stiffness=200.0,
+                damping=20.0,
             ),
         },
     )
 
-    
     # -----------------------------------------
 
     specify_cmd_for_robots(env_cfg.scene.num_envs)
@@ -874,20 +1078,40 @@ def run_sim():
 
     save_vis_checkpoint()
 
-    # Setup the IK Controller
-    diff_ik_cfg = DifferentialIKControllerCfg(
-        command_type="pose",
-        ik_method="dls", # Damped Least Squares is highly stable
-    )
-    diff_ik_controller = DifferentialIKController(diff_ik_cfg, num_envs=env_cfg.scene.num_envs, device=env.unwrapped.device)
-
-    # Find the body index for the end-effector ("link06") 
+    # ---------------- D1 arm interface ----------------
+    # The simulated arm speaks the D1's real DDS protocol; everything below
+    # drives it as a client, exactly as it would drive the hardware.
+    global _D1_SERVER, _D1_CLIENT, _D1_CONTROLLER, _D1_ARM_JOINT_IDS, _D1_GRIPPER_IDS
     arm = env.unwrapped.scene["arm"]
-    ee_body_idx = arm.find_bodies("link06")[0][0] # Get the index of link06
+    device = env.unwrapped.device
 
-    # Add these trackers just before the while loop
-    current_rel_pos = torch.zeros((env_cfg.scene.num_envs, 3), device=env.unwrapped.device, dtype=torch.float32)
-    current_rel_rot = torch.tensor([[1.0, 0.0, 0.0, 0.0]], device=env.unwrapped.device, dtype=torch.float32).repeat(env_cfg.scene.num_envs, 1)
+    arm_joint_ids = [arm.find_joints(n)[0][0] for n in D1_JOINT_NAMES]
+    gripper_ids = [arm.find_joints(n)[0][0] for n in D1_GRIPPER_JOINTS]
+    _D1_ARM_JOINT_IDS, _D1_GRIPPER_IDS = arm_joint_ids, gripper_ids
+
+    _D1_SERVER = D1SimServer(domain_id=args_cli.d1_domain_id)
+    report_d1_state(arm, _D1_SERVER, arm_joint_ids, gripper_ids)
+    _D1_SERVER.sync_targets_to_measured()
+    _D1_SERVER.start()
+
+    _D1_CLIENT = D1Arm(domain_id=args_cli.d1_domain_id)
+    if not _D1_CLIENT.wait_for_state(timeout=5.0):
+        print("[D1][WARN] No state from the arm; check the DDS domain.")
+
+    # The one Isaac-specific piece: swap this for a URDF kinematics backend to
+    # run the same controller against the real arm. See d1_sdk/README.md.
+    d1_controller = D1CartesianController(
+        arm_client=_D1_CLIENT,
+        backend=IsaacKinematics(arm, robot, ee_body_name="Link6"),
+        num_envs=env_cfg.scene.num_envs,
+        device=device,
+    )
+    d1_controller.reset(DEFAULT_ARM_TELEOP_POS, DEFAULT_ARM_TELEOP_ROT)
+    _D1_CONTROLLER = d1_controller
+
+    ee_body_idx = arm.find_bodies("Link6")[0][0]
+    actuation_state = {}
+    sim_dt = env.unwrapped.step_dt
 
     # --- OPTIMIZATION VARIABLES ---
     ros_step_counter = 0
@@ -910,12 +1134,7 @@ def run_sim():
             arm = env.unwrapped.scene["arm"]
 
             if RESET_REQUESTED:
-                reset_robot_and_arm(
-                    env,
-                    current_rel_pos,
-                    current_rel_rot,
-                    diff_ik_controller,
-                )
+                reset_robot_and_arm(env, d1_controller)
             
             # Grab the current base position and orientation
             root_pose = robot.data.root_state_w[:, :7].clone()
@@ -937,77 +1156,40 @@ def run_sim():
             arm.write_root_velocity_to_sim(zero_vel)
             # ---------------------------------------------
 
-            # --- 2. Teleop OR ROS 2 controls the Arm joints via Inverse Kinematics ---
+            # --- 2. Teleop OR ROS 2 sets the Cartesian target; the D1 API moves the arm ---
             # If a new ROS 2 command arrived, seamlessly update the unified target state
             if _ROS_NODE_REF is not None and getattr(_ROS_NODE_REF, 'arm_pose_target_rel', None) is not None:
                 ros_pos, ros_rot = _ROS_NODE_REF.arm_pose_target_rel
-                
+
                 ARM_TELEOP_POS[:] = ros_pos.tolist()
                 ARM_TELEOP_ROT[:] = ros_rot.tolist()
-                
+
                 # Extract yaw to keep keyboard teleop smoothly in sync
                 w, x, y, z = ros_rot
                 ARM_TELEOP_YAW = float(np.arctan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z)))
-                
+
                 # Clear the ROS command so we don't lock out the keyboard
                 _ROS_NODE_REF.arm_pose_target_rel = None
 
-            target_pos_np = np.array(ARM_TELEOP_POS, dtype=np.float32)
-            target_rot_np = np.array(ARM_TELEOP_ROT, dtype=np.float32)
+            # Re-engaging after a suspend: adopt the arm's actual pose as the
+            # target so it does not snap back to a stale one.
+            if ARM_RESUME_REQUESTED:
+                pos, rot = d1_controller.resume_from_arm()
+                ARM_TELEOP_POS[:] = pos
+                ARM_TELEOP_ROT[:] = rot
+                w, x, y, z = rot
+                ARM_TELEOP_YAW = float(np.arctan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z)))
+                ARM_RESUME_REQUESTED = False
 
-            # Only run the IK solver if we have a valid target
-            if target_pos_np is not None and target_rot_np is not None:
-                
-                # A. Prepare the relative target pos/rot 
-                target_rel_pos = torch.tensor(target_pos_np, device=env.unwrapped.device, dtype=torch.float32).repeat(env_cfg.scene.num_envs, 1)
-                target_rel_rot = torch.tensor(target_rot_np, device=env.unwrapped.device, dtype=torch.float32).repeat(env_cfg.scene.num_envs, 1)
-                
-                # B. SMOOTHING (Lerp the target so the arm moves fluidly)
-                alpha = 0.05  # Adjust this: Lower = slower/smoother, Higher = faster/snappier
-                current_rel_pos = current_rel_pos + alpha * (target_rel_pos - current_rel_pos)
-                
-                # Lerp quaternions and re-normalize
-                current_rel_rot = current_rel_rot + alpha * (target_rel_rot - current_rel_rot)
-                current_rel_rot = current_rel_rot / torch.norm(current_rel_rot, dim=-1, keepdim=True)
-                
-                # C. Convert Smoothed Relative Target -> World Target
-                robot_root_pos = robot.data.root_state_w[:, :3]
-                robot_root_quat = robot.data.root_state_w[:, 3:7]
-                
-                target_world_pos = robot_root_pos + quat_apply(robot_root_quat, current_rel_pos)
-                target_world_rot = quat_mul(robot_root_quat, current_rel_rot)
+            # Report the simulated encoders, then let the controller solve IK and
+            # stream joint angles back over the D1 protocol at its real 10 Hz.
+            report_d1_state(arm, _D1_SERVER, arm_joint_ids, gripper_ids)
+            d1_controller.update(ARM_TELEOP_POS, ARM_TELEOP_ROT, sim_dt)
 
-                # Fetch current EE state before diff_ik_controller.compute
-                ee_pos = arm.data.body_pos_w[:, ee_body_idx, :]
-                ee_quat = arm.data.body_quat_w[:, ee_body_idx, :]
-                
-                # D. Set the Target Command for the IK Solver
-                target_pose_tensor = torch.cat([target_world_pos, target_world_rot], dim=-1)
-                diff_ik_controller.set_command(target_pose_tensor)
-                
-                # 1. Fetch Jacobians directly from the PhysX view
-                physx_jacobians = arm.root_physx_view.get_jacobians()
-                
-                # 2. Adjust Jacobian index based on base fix status
-                ee_jacobi_idx = ee_body_idx - 1 if arm.is_fixed_base else ee_body_idx
-                jacobian = physx_jacobians[:, ee_jacobi_idx, :, :]
-                
-                # 3. Slice out root body columns if floating base
-                if not arm.is_fixed_base:
-                    jacobian = jacobian[:, :, 6:]
-                
-                current_joint_pos = arm.data.joint_pos
-                
-                # E. Compute required joint targets using IK
-                ik_joint_targets = diff_ik_controller.compute(
-                    ee_pos=ee_pos,
-                    ee_quat=ee_quat,
-                    jacobian=jacobian,
-                    joint_pos=current_joint_pos
-                )
-                
-                # F. Apply the calculated joint targets to the physics engine
-                arm.set_joint_position_target(ik_joint_targets)
+            # Whatever the arm has been commanded -- by us, or by any other
+            # process on the DDS bus -- becomes the physics target.
+            apply_d1_actuation(arm, _D1_SERVER, arm_joint_ids, gripper_ids, device, actuation_state)
+            apply_d1_targets(arm, _D1_SERVER, arm_joint_ids, gripper_ids, device)
 
 
             # 1. RL Policy controls the Dog
