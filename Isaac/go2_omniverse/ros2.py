@@ -4,6 +4,8 @@
 import asyncio
 import time
 import numpy as np
+
+from arm_mount import ee_prim_path
 import cv2                 # OpenCV for video recording
 import os, json, math
 import importlib
@@ -480,7 +482,7 @@ def add_ee_flashlight(num_envs, robot_type):
         if robot_type == "g1":
             parent_path = f"/World/envs/env_{i}/Robot/head_link"
         else:
-            parent_path = f"/World/envs/env_{i}/Arm/Link6"
+            parent_path = ee_prim_path(i)
 
         parent_prim = stage.GetPrimAtPath(parent_path)
         if not parent_prim or not parent_prim.IsValid():
@@ -511,7 +513,7 @@ def add_camera(num_envs, robot_type):
     for i in range(num_envs):
         # Mount the camera to Link6 (end-effector) of the D1 arm
         cameraCfg = CameraCfg(
-            prim_path=f"/World/envs/env_{i}/Arm/Link6/front_cam",
+            prim_path=f"{ee_prim_path(i)}/front_cam",
             update_period=0.1,
             # Standard RealSense resolution
             height=480,
@@ -606,7 +608,7 @@ def pub_robo_data_ros2(robot_type, num_envs, base_node, env, annotator_lst, next
 
         for i in range(num_envs):
             # Updated to target the new arm-mounted camera path
-            cam_prim_path = f"/World/envs/env_{i}/Arm/Link6/front_cam"
+            cam_prim_path = f"{ee_prim_path(i)}/front_cam"
             prim = stage.GetPrimAtPath(cam_prim_path)
             if prim.IsValid():
                 xform = UsdGeom.Xformable(prim)

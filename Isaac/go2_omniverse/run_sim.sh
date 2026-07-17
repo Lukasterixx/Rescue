@@ -78,4 +78,11 @@ LIDAR_CONFIG_DIR="$CONDA_PREFIX/lib/python3.11/site-packages/isaacsim/exts/isaac
 mkdir -p "$LIDAR_CONFIG_DIR"
 cp -f ./Isaac_sim/Unitree/Unitree_L1.json "$LIDAR_CONFIG_DIR/"
 
-python main.py --robot_amount 1 --robot go2 --terrain rough --custom_env maze
+# Any extra arguments are forwarded to main.py. Notably:
+#   --arm_mount weld       the D1 is part of the Go2's articulation, so its mass
+#                          reaches the walking policy. Default.
+#   --arm_mount teleport   the original behaviour: the arm is its own
+#                          articulation, pinned to the dog's back every step.
+#                          Keeps it in place, but it is dynamically a ghost.
+#   --arm_mass 3.152       D1 mass in kg (weld only). Defaults to Unitree's spec.
+python main.py --robot_amount 1 --robot go2 --terrain rough --custom_env maze "$@"

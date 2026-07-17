@@ -22,6 +22,17 @@ parser.add_argument("--terrain", type=str, default="rough", help="Setup the robo
 parser.add_argument("--robot_amount", type=int, default=1, help="Setup the robot amount")
 parser.add_argument("--d1_domain_id", type=int, default=0,
                     help="DDS domain for the D1 arm interface (the real arm uses 0).")
+parser.add_argument("--arm_mount", type=str, default="weld", choices=["weld", "teleport"],
+                    help="How the D1 is attached to the Go2. 'weld' (default) folds the arm into "
+                         "the Go2's articulation with a fixed joint, so its mass actually reaches "
+                         "the walking policy. 'teleport' is the original behaviour: the arm is its "
+                         "own articulation whose root is written onto the dog's back every step, "
+                         "which keeps it in place but makes it dynamically a ghost.")
+parser.add_argument("--arm_mass", type=float, default=3.152, metavar="KG",
+                    help="Total D1 mass in kg, weld mode only. Defaults to Unitree's published "
+                         "D1-550 figure; the URDF's own inertials are a SolidWorks export of the "
+                         "bare shells and total just 0.719 kg. Ignored under --arm_mount teleport, "
+                         "where the arm's mass never reaches the dog anyway.")
 
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
@@ -46,7 +57,12 @@ from isaaclab_rl.rsl_rl import (
     RslRlVecEnvWrapper,
 )
 import isaaclab.sim as sim_utils
-import omni.appwindow
+# Absent from the headless kit. Teleop is inherently a windowed feature, so a
+# --headless smoke test should skip the keyboard rather than fail to import.
+try:
+    import omni.appwindow
+except ModuleNotFoundError:
+    omni.appwindow = None
 from rsl_rl.runners import OnPolicyRunner
 
 # Enable required extensions BEFORE importing ros2.py (fixes omni.isaac.sensor import)
@@ -115,7 +131,15 @@ ROBOT_START_ROT = [1.0, 0.0, 0.0, 0.0]
 # on top of it rather than using a bare yaw quaternion.
 D1_EE_REST_ROT = [0.70710678, 0.0, 0.70710678, 0.0]
 
-# Height of the arm's base above the robot root (see the pinning offset below).
+# How the arm is attached. Set once from the CLI; `arm_mount` has to know before
+# anything resolves an end-effector prim path, and the drive gains below depend
+# on it too.
+import arm_mount
+WELDED = args_cli.arm_mount == "weld"
+arm_mount.set_welded(WELDED)
+
+# Height of the arm's base above the robot root. Under weld this is the fixed
+# joint's offset; under teleport it is the per-step pinning offset.
 ARM_MOUNT_Z = 0.08
 
 # Default arm IK target, relative to robot base/root frame.
@@ -160,10 +184,40 @@ D1_GRIPPER_JOINTS = d1.GRIPPER_JOINT_NAMES  # Joint7_1 / Joint7_2
 # command is lowered, so `set_all_damping(0)` goes limp for drag teaching.
 # The jaws are a small, stiff prismatic pair and need far less than the arm;
 # these must stay separate or re-writing gains would stiffen them 4x.
-ARM_BASE_STIFFNESS = 800.0
-ARM_BASE_DAMPING = 80.0
-GRIPPER_BASE_STIFFNESS = 200.0
-GRIPPER_BASE_DAMPING = 20.0
+#
+# They also depend on the mount, because the teleport hack was quietly holding
+# the old numbers up. Teleporting the arm's root every step and zeroing its
+# velocity damps the whole arm for free; welding removes that accidental damper
+# and the original gains stop working:
+#
+#   - The jaws at 200 N/m against a 15 N limit over 30 mm of travel only reach
+#     their force limit at 75 mm -- past the end of the stroke. At a typical
+#     2.5 mm error the drive makes 0.5 N, which loses to the arm's real motion:
+#     both fingers get pushed into their travel limits and pinned, and the
+#     gripper stops responding while still accepting commands. 4000 N/m reaches
+#     15 N at 3.75 mm, inside the stroke.
+#   - The arm at 800 Nm/rad behaves as a soft spring, not a servo. A P-only
+#     drive droops by torque/stiffness, so ~1 Nm of gravity leaves degrees of
+#     error on every joint and those compound into ~13 cm at the end-effector --
+#     the shortfall this repo blames on the IK. It is not the IK. Measured:
+#     800 -> 13.1 cm, 4000 -> 3.3 cm. A real D1 servo closes its own position
+#     loop and holds the angle.
+#
+# Raising these buys tracking, never strength: PhysX still clamps each joint at
+# its published effort limit (3.3 Nm on J0/J1, 1.7 Nm on J2-J5).
+#
+# Teleport keeps the original numbers so that mode behaves exactly as it always
+# has. Both fixes are measured in the D1Training repo.
+if args_cli.arm_mount == "weld":
+    ARM_BASE_STIFFNESS = 4000.0
+    ARM_BASE_DAMPING = 400.0
+    GRIPPER_BASE_STIFFNESS = 4000.0
+    GRIPPER_BASE_DAMPING = 400.0
+else:
+    ARM_BASE_STIFFNESS = 800.0
+    ARM_BASE_DAMPING = 80.0
+    GRIPPER_BASE_STIFFNESS = 200.0
+    GRIPPER_BASE_DAMPING = 20.0
 
 _RAD2DEG = 180.0 / np.pi
 _DEG2RAD = np.pi / 180.0
@@ -605,7 +659,7 @@ def reset_robot_and_arm(env, d1_controller=None):
     global GRIPPER_TELEOP_MM
 
     robot = env.unwrapped.scene["robot"]
-    arm = env.unwrapped.scene["arm"]
+    arm = arm_articulation(env)
 
     # ---------------- Robot root pose ----------------
     if ROBOT_RESET_ROOT_POSE is not None:
@@ -658,18 +712,21 @@ def reset_robot_and_arm(env, d1_controller=None):
     if d1_controller is not None:
         d1_controller.reset(DEFAULT_ARM_TELEOP_POS, DEFAULT_ARM_TELEOP_ROT)
 
-    # Also pin the arm root immediately to the reset robot pose.
-    arm.write_root_pose_to_sim(root_pose)
-    arm.write_root_velocity_to_sim(torch.zeros_like(root_vel))
+    # Welded, the arm rides the robot's root and its joints were restored by the
+    # robot's own write above; only the teleported arm needs moving separately.
+    if not WELDED:
+        # Also pin the arm root immediately to the reset robot pose.
+        arm.write_root_pose_to_sim(root_pose)
+        arm.write_root_velocity_to_sim(torch.zeros_like(root_vel))
 
-    # Reset the actual D1 arm joints too.
-    if ARM_RESET_JOINT_POS is not None:
-        arm_joint_pos = ARM_RESET_JOINT_POS.clone()
-    else:
-        arm_joint_pos = arm.data.default_joint_pos.clone()
+        # Reset the actual D1 arm joints too.
+        if ARM_RESET_JOINT_POS is not None:
+            arm_joint_pos = ARM_RESET_JOINT_POS.clone()
+        else:
+            arm_joint_pos = arm.data.default_joint_pos.clone()
 
-    arm_joint_vel = torch.zeros_like(arm.data.default_joint_vel)
-    arm.write_joint_state_to_sim(arm_joint_pos, arm_joint_vel)
+        arm_joint_vel = torch.zeros_like(arm.data.default_joint_vel)
+        arm.write_joint_state_to_sim(arm_joint_pos, arm_joint_vel)
 
     # Teleporting the joints does not tell the arm's controller about it. Re-arm
     # its targets from the new state, or it will lunge back to the stale one.
@@ -927,30 +984,17 @@ def specify_cmd_for_robots(numv_envs):
         custom_rl_env.base_command[str(i)] = [0, 0, 0]
 
 # ===================== Main run =====================
-def run_sim():
-    global _ENV_REF
-    global _ROS_NODE_REF
-    global RESET_REQUESTED
-    global ARM_TELEOP_POS, ARM_TELEOP_ROT, ARM_TELEOP_YAW, ARM_RESUME_REQUESTED
-    # subscribe to keyboard
-    _input = carb.input.acquire_input_interface()
-    _appwindow = omni.appwindow.get_default_app_window()
-    _keyboard = _appwindow.get_keyboard()
-    _sub_keyboard = _input.subscribe_to_keyboard_events(_keyboard, sub_keyboard_event)
+def setup_teleported_arm(env_cfg):
+    """The original mount: the arm is its own articulation, pinned every step.
 
-    # configure env
-    env_cfg = UnitreeGo2CustomEnvCfg()
-    if args_cli.robot == "g1":
-        env_cfg = G1RoughEnvCfg()
-    env_cfg.scene.num_envs = args_cli.robot_amount
-
-    # --- NATIVE ORBIT ARM INTEGRATION (Unitree D1) ---
-    dest_usd_path = generate_arm_usd()
-
+    It spawns far from the dog and is teleported onto its back on the first
+    tick, so the init pose here only has to be somewhere valid.
+    """
     from isaaclab.assets import ArticulationCfg
     from isaaclab.actuators import ImplicitActuatorCfg
 
-    # We natively inject the arm into the Orbit configuration.
+    dest_usd_path = generate_arm_usd()
+
     # Start folded at the arm's own zero pose -- the same configuration the real
     # D1 homes to on `return_to_zero`.
     env_cfg.scene.arm = ArticulationCfg(
@@ -965,7 +1009,6 @@ def run_sim():
             joint_vel={name: 0.0 for name in D1_JOINT_NAMES + D1_GRIPPER_JOINTS},
         ),
         actuators={
-            # J1-J3 carry the load (3.33 Nm); the wrist joints are lighter.
             "arm_motors": ImplicitActuatorCfg(
                 joint_names_expr=["Joint[1-6]"],
                 stiffness=ARM_BASE_STIFFNESS,
@@ -974,13 +1017,109 @@ def run_sim():
             # The jaws are a small, stiff prismatic pair; they need far less.
             "gripper": ImplicitActuatorCfg(
                 joint_names_expr=["Joint7_.*"],
-                stiffness=200.0,
-                damping=20.0,
+                stiffness=GRIPPER_BASE_STIFFNESS,
+                damping=GRIPPER_BASE_DAMPING,
             ),
         },
     )
+    print("[ARM] Mount: teleport -- the arm is a separate articulation pinned to "
+          "the dog's back each step. Its mass does not reach the walking policy.")
 
-    # -----------------------------------------
+
+def _scope_env_cfg_to_legs(env_cfg):
+    """Point every joint-space policy term at the legs only.
+
+    Welding gives the robot 20 joints where the checkpoint expects 12. Without
+    this the policy is handed an 8-wider observation vector and either throws a
+    shape error or, worse, does not.
+    """
+    from isaaclab.managers import SceneEntityCfg
+    from custom_rl_env import LEG_JOINTS
+
+    env_cfg.actions.joint_pos.joint_names = LEG_JOINTS
+    for term in ("joint_pos", "joint_vel"):
+        obs_term = getattr(env_cfg.observations.policy, term)
+        obs_term.params = {"asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINTS)}
+
+
+def setup_welded_arm(env_cfg):
+    """Fold the arm into the Go2's articulation with a fixed joint.
+
+    The arm stops being a separate scene entity entirely: it becomes part of
+    `scene["robot"]`, which is what lets its mass reach the gait. Everything
+    downstream goes through `arm_articulation()` so the D1 layer does not care.
+    """
+    from isaaclab.actuators import ImplicitActuatorCfg
+    from arm_weld import build_welded_robot_usd
+
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    weld = build_welded_robot_usd(
+        go2_usd_path=env_cfg.scene.robot.spawn.usd_path,
+        d1_urdf_path=os.path.join(project_root, "d1_arm", "d1.urdf"),
+        out_usd_path=os.path.join(project_root, "d1_arm", "generated", "go2_d1.usd"),
+        mount_pos=(0.0, 0.0, ARM_MOUNT_Z),
+        arm_mass_kg=args_cli.arm_mass,
+    )
+
+    robot_cfg = env_cfg.scene.robot
+    robot_cfg.spawn.usd_path = weld.usd_path
+    # The arm starts folded at its zero pose, as on `return_to_zero`.
+    robot_cfg.init_state.joint_pos = dict(robot_cfg.init_state.joint_pos)
+    robot_cfg.init_state.joint_pos.update({"Joint[1-6]": 0.0, "Joint7_.*": 0.0})
+    robot_cfg.actuators = dict(robot_cfg.actuators)
+    robot_cfg.actuators["d1_arm"] = ImplicitActuatorCfg(
+        joint_names_expr=["Joint[1-6]"],
+        stiffness=ARM_BASE_STIFFNESS,
+        damping=ARM_BASE_DAMPING,
+    )
+    robot_cfg.actuators["d1_gripper"] = ImplicitActuatorCfg(
+        joint_names_expr=["Joint7_.*"],
+        stiffness=GRIPPER_BASE_STIFFNESS,
+        damping=GRIPPER_BASE_DAMPING,
+    )
+
+    _scope_env_cfg_to_legs(env_cfg)
+    print("[ARM] Mount: weld -- the arm is part of the Go2's articulation, so its "
+          "mass perturbs the gait. Policy terms scoped to the 12 leg joints.")
+
+
+def arm_articulation(env):
+    """The articulation carrying the D1's joints, whichever mount is in use.
+
+    Welded, the arm's joints live in the Go2's own articulation, so this is the
+    robot itself. Teleported, the arm is a separate scene entity. Every D1
+    helper resolves joint and body indices from the object it is handed, so
+    both work unchanged -- which is the whole reason the mount modes can share
+    one code path.
+    """
+    return env.unwrapped.scene["robot"] if WELDED else env.unwrapped.scene["arm"]
+
+
+def run_sim():
+    global _ENV_REF
+    global _ROS_NODE_REF
+    global RESET_REQUESTED
+    global ARM_TELEOP_POS, ARM_TELEOP_ROT, ARM_TELEOP_YAW, ARM_RESUME_REQUESTED
+    # subscribe to keyboard
+    if omni.appwindow is not None:
+        _input = carb.input.acquire_input_interface()
+        _appwindow = omni.appwindow.get_default_app_window()
+        _keyboard = _appwindow.get_keyboard()
+        _sub_keyboard = _input.subscribe_to_keyboard_events(_keyboard, sub_keyboard_event)
+    else:
+        print("[keys] Headless: keyboard teleop unavailable; the robot will stand still.")
+
+    # configure env
+    env_cfg = UnitreeGo2CustomEnvCfg()
+    if args_cli.robot == "g1":
+        env_cfg = G1RoughEnvCfg()
+    env_cfg.scene.num_envs = args_cli.robot_amount
+
+    # --- Unitree D1 arm ---
+    if WELDED:
+        setup_welded_arm(env_cfg)
+    else:
+        setup_teleported_arm(env_cfg)
 
     specify_cmd_for_robots(env_cfg.scene.num_envs)
 
@@ -996,7 +1135,7 @@ def run_sim():
     global ROBOT_RESET_ROOT_POSE, ROBOT_RESET_JOINT_POS, ARM_RESET_JOINT_POS
 
     robot = env.unwrapped.scene["robot"]
-    arm = env.unwrapped.scene["arm"]
+    arm = arm_articulation(env)
 
     ROBOT_RESET_ROOT_POSE = robot.data.root_state_w[:, :7].clone()
     ROBOT_RESET_JOINT_POS = robot.data.joint_pos.clone()
@@ -1004,7 +1143,7 @@ def run_sim():
 
     print("[RESET] Captured startup robot root pose:", ROBOT_RESET_ROOT_POSE[0].detach().cpu().numpy())
 
-    arm = env.unwrapped.scene["arm"]
+    arm = arm_articulation(env)
     print("[ARM DEBUG] joint names:", arm.data.joint_names)
     print("[ARM DEBUG] body names:", arm.data.body_names)
 
@@ -1040,12 +1179,16 @@ def run_sim():
         ROBOT_RESET_JOINT_POS.clone(),
         torch.zeros_like(robot.data.default_joint_vel),
     )
-    arm.write_root_pose_to_sim(ROBOT_RESET_ROOT_POSE.clone())
-    arm.write_root_velocity_to_sim(torch.zeros_like(robot.data.root_state_w[:, 7:13]))
-    arm.write_joint_state_to_sim(
-        ARM_RESET_JOINT_POS.clone(),
-        torch.zeros_like(arm.data.default_joint_vel),
-    )
+    # Welded, the arm has no root of its own and its joints are already in the
+    # robot's state written just above -- these calls would be redundant writes
+    # of the same tensors.
+    if not WELDED:
+        arm.write_root_pose_to_sim(ROBOT_RESET_ROOT_POSE.clone())
+        arm.write_root_velocity_to_sim(torch.zeros_like(robot.data.root_state_w[:, 7:13]))
+        arm.write_joint_state_to_sim(
+            ARM_RESET_JOINT_POS.clone(),
+            torch.zeros_like(arm.data.default_joint_vel),
+        )
 
     camera_lst = add_camera(env_cfg.scene.num_envs, args_cli.robot)
     add_ee_flashlight(env_cfg.scene.num_envs, args_cli.robot)
@@ -1082,7 +1225,7 @@ def run_sim():
     # The simulated arm speaks the D1's real DDS protocol; everything below
     # drives it as a client, exactly as it would drive the hardware.
     global _D1_SERVER, _D1_CLIENT, _D1_CONTROLLER, _D1_ARM_JOINT_IDS, _D1_GRIPPER_IDS
-    arm = env.unwrapped.scene["arm"]
+    arm = arm_articulation(env)
     device = env.unwrapped.device
 
     arm_joint_ids = [arm.find_joints(n)[0][0] for n in D1_JOINT_NAMES]
@@ -1129,31 +1272,35 @@ def run_sim():
 
         with torch.inference_mode():
             
-            # --- 1. Pin the Arm using Native Orbit API ---
+            # --- 1. Keep the arm on the dog's back ---
             robot = env.unwrapped.scene["robot"]
-            arm = env.unwrapped.scene["arm"]
+            arm = arm_articulation(env)
 
             if RESET_REQUESTED:
                 reset_robot_and_arm(env, d1_controller)
-            
-            # Grab the current base position and orientation
-            root_pose = robot.data.root_state_w[:, :7].clone()
-            
-            local_offset = torch.tensor([[0.0, 0.0, 0.08]], device=env.unwrapped.device, dtype=torch.float32)
-            local_offset = local_offset.repeat(env_cfg.scene.num_envs, 1)
-            
-            # B. Rotate this local offset into the world frame using the dog's orientation
-            world_offset = quat_apply(root_pose[:, 3:7], local_offset)
-            
-            # C. Add the rotated offset to the robot's world position
-            root_pose[:, :3] += world_offset
-            
-            # D. Write the teleport command directly to PhysX
-            arm.write_root_pose_to_sim(root_pose)
-            
-            # E. KILL MOMENTUM: Force the arm's velocity to zero so physics doesn't drag it
-            zero_vel = torch.zeros_like(robot.data.root_state_w[:, 7:13])
-            arm.write_root_velocity_to_sim(zero_vel)
+
+            # Welded, the fixed joint does this in physics and there is nothing
+            # to do here -- which is the point of the mode. Writing the root
+            # would fight the articulation solver rather than help it.
+            if not WELDED:
+                # Grab the current base position and orientation
+                root_pose = robot.data.root_state_w[:, :7].clone()
+
+                local_offset = torch.tensor([[0.0, 0.0, ARM_MOUNT_Z]], device=env.unwrapped.device, dtype=torch.float32)
+                local_offset = local_offset.repeat(env_cfg.scene.num_envs, 1)
+
+                # B. Rotate this local offset into the world frame using the dog's orientation
+                world_offset = quat_apply(root_pose[:, 3:7], local_offset)
+
+                # C. Add the rotated offset to the robot's world position
+                root_pose[:, :3] += world_offset
+
+                # D. Write the teleport command directly to PhysX
+                arm.write_root_pose_to_sim(root_pose)
+
+                # E. KILL MOMENTUM: Force the arm's velocity to zero so physics doesn't drag it
+                zero_vel = torch.zeros_like(robot.data.root_state_w[:, 7:13])
+                arm.write_root_velocity_to_sim(zero_vel)
             # ---------------------------------------------
 
             # --- 2. Teleop OR ROS 2 sets the Cartesian target; the D1 API moves the arm ---

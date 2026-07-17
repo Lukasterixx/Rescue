@@ -25,6 +25,8 @@
 import omni
 import omni.graph.core as og
 
+from arm_mount import ee_prim_path
+
 
 def create_front_cam_omnigraph(robot_num):
     """Define the OmniGraph for the Isaac Sim environment."""
@@ -47,7 +49,7 @@ def create_front_cam_omnigraph(robot_num):
 
             keys.SET_VALUES: [
                 # --- UPDATED: Point to the new arm-mounted camera path ---
-                ("IsaacCreateRenderProduct.inputs:cameraPrim", f"/World/envs/env_{robot_num}/Arm/Link6/front_cam"),
+                ("IsaacCreateRenderProduct.inputs:cameraPrim", f"{ee_prim_path(robot_num)}/front_cam"),
                 ("IsaacCreateRenderProduct.inputs:enabled", True),
                 ("ROS2CameraHelper.inputs:type", "rgb"),
                 ("ROS2CameraHelper.inputs:topicName", f"robot{robot_num}/front_cam/rgb"),

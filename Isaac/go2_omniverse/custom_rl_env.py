@@ -40,6 +40,21 @@ from robots.g1.config import G1_CFG
 def is_flat_terrain():
     return "--terrain" in sys.argv and "flat" in sys.argv
 
+# The 12 joints the walking checkpoint knows about.
+#
+# Only relevant under `--arm_mount weld`: welding folds the D1's 8 joints into
+# the Go2's articulation, so the robot has 20 where the policy expects 12, and
+# every joint-space observation and action has to be scoped back to these.
+# `omniverse_sim._scope_env_cfg_to_legs()` applies it. Under `--arm_mount
+# teleport` the arm is its own articulation and nothing here needs to change.
+#
+# Scoping is safe because `SceneEntityCfg` resolves joint names through
+# `find_joints(..., preserve_order=False)`, which returns indices in ascending
+# articulation order. Subsetting cannot reorder the legs relative to each other,
+# so the 12 values reach the policy in exactly the order it expects -- even
+# though PhysX interleaves the arm's Joint1 between the thigh and calf joints.
+LEG_JOINTS = [".*_hip_joint", ".*_thigh_joint", ".*_calf_joint"]
+
 # --- RESTORED MISSING HELPERS ---
 base_command = {}
 
