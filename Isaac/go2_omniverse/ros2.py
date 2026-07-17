@@ -502,13 +502,31 @@ def add_ee_flashlight(num_envs, robot_type):
 
         xform = UsdGeom.Xformable(light.GetPrim())
         xform.ClearXformOpOrder()
-        xform.AddTranslateOp().Set(Gf.Vec3d(0.15, 0.0, 0.0))
+        # Out along the gripper's approach axis (Link6 +Z), which is where the
+        # camera now looks. This used to sit on +X, lighting the floor under the
+        # wrist rather than whatever is in front of the jaws.
+        xform.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, 0.15))
 
         print(f"[FLASHLIGHT] Added stronger end-effector light at {light_path}")
 
+# Where the camera sits on Link6, in Link6's own axes.
+#
+# +Z is the gripper's approach axis, so 0.05 along it puts the lens out past the
+# wrist. -X is "up" out of the back of the hand (Link6 +X is the image-down axis
+# and points floor-ward), so -0.04 lifts the camera clear of the jaws -- they
+# occupy roughly z 0.07..0.12 on the +Z axis, and sitting on that axis put the
+# lens inside the claw.
+#
+# add_camera() and the arm_camera_link broadcast both read this. They describe
+# one physical camera and must not drift apart: the scanner casts its FOV rays
+# from arm_camera_link, so if that frame is not where the lens is, the rays start
+# somewhere the camera cannot see from.
+_CAM_OFFSET_IN_LINK6 = (-0.04, 0.0, 0.05)
+
+
 def add_camera(num_envs, robot_type):
     annotators = []
-    global _cameras_keep_alive 
+    global _cameras_keep_alive
 
     for i in range(num_envs):
         # Mount the camera to Link6 (end-effector) of the D1 arm
@@ -527,8 +545,24 @@ def add_camera(num_envs, robot_type):
                 # Lower near-clipping plane because arms get close to objects
                 clipping_range=(0.01, 1.0e5) 
             ),
-            # Position offset so the camera sits slightly in front of the link's center
-            offset=CameraCfg.OffsetCfg(pos=(0.05, 0.0, 0.0), rot=(0.5, -0.5, 0.5, -0.5), convention="ros"),
+            # Look where the gripper points.
+            #
+            # Link6's +Z is the approach axis -- the direction the jaws close
+            # along, and the one D1_EE_REST_ROT is described against. +X is
+            # across the wrist, and at the arm's zero pose it points at the
+            # floor. The old (0.5, -0.5, 0.5, -0.5) put the optical axis on +X,
+            # so the camera stared straight down out of the gripper.
+            #
+            # A "ros" offset gives the optical frame (X right, Y down, Z fwd) in
+            # the parent's axes, so we want Z_opt = Link6 +Z. Y_opt (image down)
+            # = Link6 +X, which points floor-ward at rest and so keeps the image
+            # upright; X_opt = Y_opt x Z_opt = Link6 -Y. That is a -90 deg turn
+            # about Link6's Z.
+            offset=CameraCfg.OffsetCfg(
+                pos=_CAM_OFFSET_IN_LINK6,
+                rot=(0.70710678, 0.0, 0.0, -0.70710678),
+                convention="ros",
+            ),
         )
 
         # (If using the g1 robot, you might want to bypass or update this condition)
@@ -649,10 +683,29 @@ def pub_robo_data_ros2(robot_type, num_envs, base_node, env, annotator_lst, next
         ee_trans.header.stamp = time_now_for_clock
         ee_trans.header.frame_id = "odom"
         ee_trans.child_frame_id = "arm_camera_link"
-        
+
         # Isaac provides arrays: pos [x,y,z], quat [w,x,y,z] in World Frame
         px, py, pz = float(ee_pos[0]), float(ee_pos[1]), float(ee_pos[2])
         qw, qx, qy, qz = float(ee_quat[0]), float(ee_quat[1]), float(ee_quat[2]), float(ee_quat[3])
+
+        # Link6 is not a camera frame, and consumers treat this one as if it
+        # were: the wall scanner reads this frame's yaw and casts its FOV rays
+        # down +X, from this frame's origin. So hand them a proper ROS camera
+        # body frame -- +X along the view direction, +Z up, sitting where the
+        # lens actually is -- rather than Link6 raw, whose +X points across the
+        # wrist (at the floor, when the arm is at zero).
+        #
+        # The camera looks down Link6's +Z, so: X_body = Link6 +Z, Z_body =
+        # Link6 -X, Y_body = Z_body x X_body = Link6 +Y. That is a -90 deg turn
+        # about Link6's Y.
+        _LINK6_TO_CAM = Rotation.from_quat([0.0, -0.70710678, 0.0, 0.70710678])  # x,y,z,w
+        _link6_rot = Rotation.from_quat([qx, qy, qz, qw])
+
+        _lens = np.array([px, py, pz]) + _link6_rot.apply(_CAM_OFFSET_IN_LINK6)
+        px, py, pz = float(_lens[0]), float(_lens[1]), float(_lens[2])
+
+        _cam_rot = _link6_rot * _LINK6_TO_CAM
+        qx, qy, qz, qw = _cam_rot.as_quat()
 
         # We must apply the same odom origin and nudge as the base
         if 0 in base_node.odom_origins:
