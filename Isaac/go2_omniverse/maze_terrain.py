@@ -16,6 +16,9 @@ class MazeTerrainCfg(SubTerrainBaseCfg):
     cell_width: float = 1.2
     step_height: float = 0.1
     step_depth: float = 0.1  # <--- NEW PARAMETER (Default 0.1)
+    # Chance that a newly grown cell changes floor height from its parent (2-4 steps up or
+    # down). Every staircase in the maze comes from this; 0.0 builds a maze on one flat floor.
+    elevation_chance: float = 0.15
     function = MISSING
 
 def generate_maze_terrain(difficulty: float, cfg: MazeTerrainCfg) -> tuple[list[trimesh.Trimesh], np.ndarray]:
@@ -75,7 +78,7 @@ def generate_maze_terrain(difficulty: float, cfg: MazeTerrainCfg) -> tuple[list[
             new_z = parent_z
             
             # Elevation Chance
-            if random.random() < 0.15:
+            if random.random() < cfg.elevation_chance:
                 steps_changed = random.randint(2, 4) 
                 elevation_change = steps_changed * cfg.step_height
                 

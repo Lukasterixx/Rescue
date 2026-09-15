@@ -25,6 +25,11 @@ ROUGH_TERRAINS_CFG = TerrainGeneratorCfg(
             cell_width=1.2,      # Slightly wider halls
             step_height=0.1,
             step_depth=0.2,
+            # FLAT FLOOR, NO STAIRS (2026-09-14). No policy trained for this robot climbs the
+            # maze's 10 cm x 20 cm stairs reliably (training/README.md, "The seeded benchmark"),
+            # so the maze is built on one level and the walking policy is trained on flat
+            # ground. Set back to 0.15 to bring the stairs back.
+            elevation_chance=0.0,
             size=(15.0, 15.0)    # 15x15m maze
         ),
     },

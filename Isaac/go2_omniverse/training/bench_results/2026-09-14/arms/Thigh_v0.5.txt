@@ -1,0 +1,79 @@
+MEASURE_BENCH  2026-09-14_18-14-06_exp_Thigh/model_8649.pt   robot: base +0.00 kg, CoM x +0.0 cm
+seed 1, 100 robots per terrain, forward 0.50 m/s, maze stairs 10 cm riser x 20 cm tread, spawn 1.2 m before the flight
+foot origin at rest 2.31 cm above flat ground (used as the foot radius)
+standing, flat: foot ahead of its thigh joint FL/FR/RL/RR +1.6 -1.3 -5.5 -8.2 cm
+
+COMMAND RESPONSE, flat ground, ensemble mean of body-frame vx
+  0 -> 0.50 m/s: 50 % / 90 % of its own steady speed after 0.16 / 0.50 s, overshoot +1.8 %, settles at 100.8 % of the command
+  moving backward within 1 s of the request: 0.0 % of robots below -0.05 m/s (mean worst +0.063 m/s, mean retreat +0.1 cm)
+  0.50 -> 0: below 10 % of the command after 0.42 s, travels 12.7 cm, |vx| 0.002 m/s once settled
+  vx every 0.25 s from the request: 0.09 0.32 0.46 0.47 0.49 0.50 0.50 0.50 0.51 0.50 0.50 0.50 0.50
+
+TURN IN PLACE 1.0 rad/s, flat: tracking 105.8 %, drift 0.042 m/s
+
+TOUCHDOWN during the forward command (first 1.5 s excluded; stair robots until the far landing)
+  td / lo   foot ahead of its own thigh joint at touchdown / lift-off, yaw frame, + forward
+  mid       centre of the stance sweep; 0 = stance centred under the hip
+  td-neut   td minus Raibert's neutral point v*stance/2; 0 = the foot lands where the
+            stance would centre under the hip, negative = lands short
+  gap       front foot ahead of the same-side rear foot at the front touchdown (hips 38.7 cm apart)
+  chatter   contacts shorter than 60 ms, % of all contacts; excluded from every other column
+                  n     td     lo    mid  stance   air  stride     v  td-neut    gap  chatter
+                        cm     cm     cm      ms    ms      cm   m/s       cm     cm        %
+   flat front  2901  -10.0  -17.2  -13.6     221   220    22.2  0.54    -15.9   19.9      0.0
+    flat rear  2901   19.0    8.8   13.9     221   220    22.2  0.54     13.0             0.0
+    up4 front  3240  -11.9  -14.8  -13.3     196   194    14.7  0.25    -14.3   17.1      3.8
+     up4 rear  3161   14.6   10.0   12.3     197   193    14.5  0.27     12.0             6.8
+  down4 front  1726   -7.8  -13.2  -10.5     192   191    18.7  0.53    -12.9   20.5      4.0
+   down4 rear  1321   16.2    8.9   12.6     203   255    19.7  0.52     10.9            14.7
+   up11 front  3409  -11.6  -13.0  -12.3     185   185    12.5  0.11    -12.7   16.7      5.1
+    up11 rear  3347   12.7   10.6   11.7     187   184    11.6  0.13     11.5             5.3
+ down11 front  3340   -6.0  -11.3   -8.7     162   162    17.9  0.59    -10.8   22.1      5.9
+  down11 rear  2402   15.0    8.5   11.7     170   229    20.2  0.57     10.1            18.0
+
+STABILITY during the forward command (same window)
+  wobble = pitch minus its own 0.5 s moving average, so a stair's slope and the entry and
+  exit are not counted
+          pitch-rate RMS  wobble sd  foot slip  slipping
+                   rad/s        deg        m/s  % loaded
+    flat           0.120       0.36      0.049       2.6
+     up4           0.296       0.84      0.072       6.7
+   down4           0.440       1.21      0.075       7.3
+    up11           0.347       1.01      0.075       7.0
+  down11           0.520       1.33      0.094      10.2
+
+STAIRS, forward until the far landing. Progress is judged at the base.
+  stalled: more than 3 s without reaching a new step (on the flight, before finishing)
+  stuck at: for robots that did not finish, where the base ended, m past the first riser/nosing
+         steps   fell  1 step  4 steps  finish  s/step  stalled  stuck at
+                    %       %        %       %  median        %  m median
+     up4     4    0.0   100.0      2.0     1.0    1.31     98.0     -0.26
+   down4     4    0.0   100.0    100.0   100.0    0.40      0.0       nan
+    up11    11    0.0    89.0      0.0     0.0     nan     99.0     -0.37
+  down11    11    0.0   100.0    100.0   100.0    0.44      0.0       nan
+
+FOOTFALLS ON THE FLIGHT: every stance of 60 ms or more whose touchdown was between 25 cm
+before the first edge and 10 cm past the last, clear of the rings' corners. % of footfalls.
+  tread   supported on a tread, centre more than a radius + 1 cm from both its edges
+  back    supported, within a radius + 1 cm of the tread's BACK edge
+          (up: just past the nosing it stepped over; down: heel against the riser behind)
+  front   supported, within a radius + 1 cm of the tread's FRONT edge
+          (up: toe against the next riser; down: hanging over the nosing)
+  face    not resting on a tread at all: against a vertical face or on a nosing corner
+  hforce  contact force more than 70 % horizontal at touchdown (independent of geometry)
+                    n  tread   back  front   face  hforce  past back  to front
+                           %      %      %      %       %     cm med    cm med
+      up4 front  2536   74.1   12.1    7.2    6.6     3.1        7.3      11.9
+       up4 rear  2132   80.8   13.2    0.5    5.5     0.7        4.2      13.4
+        up4 all  4668   77.2   12.6    4.1    6.1     2.0        6.3      12.7
+    down4 front  1122   70.1    8.0   13.5    8.4     5.0       11.9       8.8
+     down4 rear   896   78.9    1.3   16.7    3.0     0.6       11.2       8.7
+      down4 all  2018   74.0    5.1   14.9    6.0     3.0       11.6       8.7
+     up11 front  1771   73.1   12.8    8.9    5.3     1.6        6.1      13.0
+      up11 rear  1572   84.0   11.8    0.3    3.9     0.3        3.1      15.6
+       up11 all  3343   78.3   12.3    4.8    4.6     1.0        5.1      14.3
+   down11 front  2737   62.9    6.9   21.4    8.8     4.7       13.4       6.9
+    down11 rear  1932   76.7    1.4   18.6    3.3     0.8       11.5       8.5
+     down11 all  4669   68.6    4.7   20.2    6.5     3.1       12.7       7.5
+
+ACTIONS (policy mean, all robots and steps): |a| p99 5.25, p99.9 6.75, p99.99 8.00; before the clip at 20.0, max per joint 4.9 4.0 5.4 4.6 5.1 5.7 6.2 5.6 7.8 8.8 9.9 8.6

@@ -85,4 +85,10 @@ cp -f ./Isaac_sim/Unitree/Unitree_L1.json "$LIDAR_CONFIG_DIR/"
 #                          articulation, pinned to the dog's back every step.
 #                          Keeps it in place, but it is dynamically a ghost.
 #   --arm_mass 3.152       D1 mass in kg (weld only). Defaults to Unitree's spec.
-python main.py --robot_amount 1 --robot go2 --terrain rough --custom_env maze "$@"
+# --enable_cameras is required because add_camera() builds an IsaacLab Camera
+# sensor. Its initialisation is deferred to the next timeline "play" event, and
+# at startup the timeline is already playing -- so without the flag the sensor
+# sat uninitialised and nothing complained. The first press of Play in the GUI
+# fires that event, the sensor refuses to initialise without the flag, and the
+# error surfaces out of the following env.step().
+python main.py --enable_cameras --robot_amount 1 --robot go2 --terrain rough --custom_env maze "$@"

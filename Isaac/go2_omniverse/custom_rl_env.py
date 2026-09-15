@@ -34,6 +34,7 @@ from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 import isaaclab_tasks.manager_based.locomotion.velocity.mdp as mdp
 
 from terrain_cfg import ROUGH_TERRAINS_CFG
+from go2_actuators import apply_go2_actuator
 from robots.g1.config import G1_CFG
 
 # --- HELPER TO DETECT FLAT CONFIG ---
@@ -65,6 +66,74 @@ def constant_commands(env: ManagerBasedRLEnvCfg) -> torch.Tensor:
         tensor_lst[i] = torch.tensor(base_command.get(str(i), [0.0, 0.0, 0.0]), dtype=torch.float32, device=env.device)
     return tensor_lst
 # --------------------------------
+
+# Height scan with WALLS REMOVED, not clamped.
+#
+# THE PROBLEM IT SOLVES, measured. Driven in the maze the robot refused forward commands and
+# reversed instead. `training/measure_scan.py` reproduced it on flat ground by overwriting
+# only the height scan: with a wall 0.5 m ahead, a held +1.0 m/s forward command produced
+# -0.53 m/s, i.e. the robot drove backwards, and side walls alone in a corridor took forward
+# motion from +0.53 m/s to zero.
+#
+# WHY. `height_scan` reports ground height relative to a nominal, more negative meaning
+# higher, and the observation clips at -1.0. A 1 m wall reads -1.165 and clips. The policy
+# trained on risers up to 0.16 m, which read about -0.33, so its only learned meaning for a
+# large negative ahead is "a step up" -- and one this large is a step it cannot climb, so it
+# backs away. Correct behaviour on the terrain it knows; wrong in a corridor.
+#
+# WHY CLAMPING DOES NOT FIX IT, also measured. A clamp only makes the wall a SHORTER step, and
+# the sweep in measure_scan.py found no value that helps -- reversal at every one of -1.00,
+# -0.85, -0.70, -0.55 and -0.40, WORST at -0.70 (-1.19 m/s) where the wall reads most like a
+# steep but plausible stair. The arithmetic says why: a clamp of v implies a step of
+# (0.335 - 0.5 - v) m, so even -0.40 still says 0.24 m, well above the 0.16 m the policy has
+# ever climbed. The value that would read as climbable is about -0.33, and the maze's own
+# 10 cm risers read -0.57, so that clamp blinds the robot to the steps it is there to climb.
+#
+# SO THE WALL IS REMOVED INSTEAD OF SHORTENED. Rays that read past `wall_threshold` are not a
+# surface this robot can ever step onto, so they are replaced with the median of the rays that
+# ARE walkable -- the local floor. The policy then sees the floor continuing, which is the
+# honest input for a locomotion controller whose job stops at the gait. Avoiding the wall is
+# nav2's job, through the costmap, and it has the lidar to do it with.
+#
+# THE THRESHOLD HAS ROOM. In the maze the steepest thing is a 10 cm riser on a 20 cm tread,
+# reaching about -0.57 at the front of the scan (flights are 2-4 steps, so 0.4 m of rise is
+# the worst case). A wall reads -1.165 before clipping. -0.75 sits between them with 0.18 to
+# spare on the stair side, so no step in this maze is ever mistaken for a wall.
+#
+# WHAT IT COSTS. The policy becomes blind to anything it could not climb anyway, including
+# obstacles that are not walls. It will walk into such a thing if commanded to. That is
+# accepted deliberately: the alternative is the robot deciding for itself where it may go,
+# which is the nav stack's decision and not the gait's.
+#
+# THE PROPER FIX IS IN TRAINING, not here. A policy that had seen walls would learn that a
+# clipped column is simply not ground and needs no filter. That costs a training run; this is
+# the change that makes the current checkpoint usable in the maze tonight. See
+# training/README.md.
+WALL_SCAN_THRESHOLD = -0.75
+
+
+def height_scan_walls_removed(env, sensor_cfg, wall_threshold: float = WALL_SCAN_THRESHOLD,
+                              offset: float = 0.5) -> torch.Tensor:
+    """`mdp.height_scan`, with rays that hit a wall replaced by the local floor."""
+    sensor = env.scene[sensor_cfg.name]
+    h = sensor.data.pos_w[:, 2].unsqueeze(1) - sensor.data.ray_hits_w[..., 2] - offset
+
+    # A ray that escapes the mesh returns inf. Treat it as a wall rather than letting one
+    # non-finite value poison the median and, through it, every column of the observation.
+    finite = torch.isfinite(h)
+    wall = (~finite) | (h < wall_threshold)
+
+    walkable = torch.where(wall, torch.full_like(h, float("nan")), h)
+    floor = torch.nanmedian(walkable, dim=1, keepdim=True).values
+    # Every ray a wall (nose into a corner): fall back to the LEAST negative reading, i.e.
+    # the lowest ground the scan can see, which is the best floor estimate available.
+    fallback = torch.where(finite, h, torch.full_like(h, -float("inf"))).max(dim=1, keepdim=True).values
+    floor = torch.where(torch.isnan(floor), fallback, floor)
+    floor = torch.nan_to_num(floor, nan=0.0, posinf=0.0, neginf=0.0)
+
+    return torch.where(wall, floor.expand_as(h), torch.nan_to_num(h, nan=0.0, posinf=0.0, neginf=0.0))
+
+
 
 @configclass
 class MySceneCfg(InteractiveSceneCfg):
@@ -166,7 +235,11 @@ class ObservationsCfg:
         joint_vel = ObsTerm(func=mdp.joint_vel_rel)
         actions = ObsTerm(func=mdp.last_action)
         height_scan = ObsTerm(
-            func=mdp.height_scan,
+            # NOT `mdp.height_scan` -- see `height_scan_walls_removed` above. The maze has
+            # 1 m walls and the policy was trained on a terrain whose tallest feature was a
+            # 16 cm riser, so an unfiltered wall reads as an unclimbable step and the robot
+            # reverses away from it. Measured, with the numbers, in that function's comment.
+            func=height_scan_walls_removed,
             params={"sensor_cfg": SceneEntityCfg("height_scanner")},
             clip=(-1.0, 1.0),
         )
@@ -334,6 +407,22 @@ class UnitreeGo2CustomEnvCfg(LocomotionVelocityRoughEnvCfg):
             ),
         )
         self.scene.height_scanner.prim_path = "{ENV_REGEX_NS}/Robot/base"
+
+        # THE LEGS RUN UNITREE'S MEASURED MOTOR, not Isaac Lab's ideal one -- and this line
+        # has to stay in step with the training task. `training/go2_rescue/` applies the same
+        # swap from the same module (go2_actuators.py), because a policy trained against one
+        # torque-speed curve and played back against another is being run on a robot it never
+        # saw. The stock DCMotor offers a flat 23.5 N*m of BRAKING torque at any joint speed;
+        # the real motor gives 4.3 at 27 rad/s, which is precisely the authority a policy
+        # leans on when it catches the body on a step edge.
+        #
+        # Policies trained BEFORE this line existed (the 2026 rough policy in agent_cfg.py)
+        # were trained against the ideal motor. They still load and still walk -- the motor is
+        # not part of the observation -- but they are now being played on a slightly different
+        # robot than they trained on. Remove this line to put such a policy back on its own
+        # motor; leave it for anything trained by `training/go2_rescue/`.
+        apply_go2_actuator(self.scene.robot)
+
         self.actions.joint_pos.scale = 0.25
         self.rewards.feet_air_time.params["sensor_cfg"].body_names = ".*_foot"
         self.rewards.feet_air_time.weight = 0.01

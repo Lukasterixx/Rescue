@@ -35,7 +35,7 @@ independent of the sim's ROS 2 bridge, which runs on FastRTPS.
 ## Keyboard controls
 
 Arm commands all leave over the D1 API, so these keys exercise the same path the
-real arm would. (`R` and `T` are simulator controls, not arm commands.)
+real arm would. (`R`, `T` and `C` are simulator controls, not arm commands.)
 
 | Key | Action |
 |---|---|
@@ -47,6 +47,7 @@ real arm would. (`R` and `T` are simulator controls, not arm commands.)
 | `P` | toggle motor power (e-stop) |
 | `R` | reset robot **and** arm *(sim)* |
 | `T` | toggle lidar debug draw *(sim)* |
+| `C` | toggle the chase camera — off frees Isaac's viewport controls *(sim)* |
 
 The dog's own `WASD` / `QE` teleop is unchanged.
 

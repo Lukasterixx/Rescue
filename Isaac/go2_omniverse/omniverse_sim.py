@@ -11,6 +11,10 @@ import os
 import threading
 
 # add argparse arguments
+# Unitree's published D1-550 figure (3152 g).
+# https://support.unitree.com/home/en/developer/D1Arm_services
+D1_550_MASS_KG = 3.152
+
 parser = argparse.ArgumentParser(description="Train an RL agent with RSL-RL.")
 parser.add_argument("--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations.")
 parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to simulate.")
@@ -28,11 +32,14 @@ parser.add_argument("--arm_mount", type=str, default="weld", choices=["weld", "t
                          "the walking policy. 'teleport' is the original behaviour: the arm is its "
                          "own articulation whose root is written onto the dog's back every step, "
                          "which keeps it in place but makes it dynamically a ghost.")
-parser.add_argument("--arm_mass", type=float, default=3.152, metavar="KG",
-                    help="Total D1 mass in kg, weld mode only. Defaults to Unitree's published "
-                         "D1-550 figure; the URDF's own inertials are a SolidWorks export of the "
-                         "bare shells and total just 0.719 kg. Ignored under --arm_mount teleport, "
-                         "where the arm's mass never reaches the dog anyway.")
+parser.add_argument("--arm_mass", type=float, default=D1_550_MASS_KG, metavar="KG",
+                    help=f"Total D1 mass in kg, weld mode only. Defaults to {D1_550_MASS_KG}, "
+                         "Unitree's published D1-550 figure, because the URDF's own inertials are "
+                         "a SolidWorks export of the bare shells and total only 0.719 kg -- far "
+                         "too light to perturb the gait. Pass 0.719 to use the URDF as-is. Only "
+                         "mass and inertia scale; the joint effort limits are published separately "
+                         "and are left alone. Ignored under --arm_mount teleport, where the arm's "
+                         "mass never reaches the dog anyway.")
 
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
@@ -48,6 +55,16 @@ simulation_app = app_launcher.app  # omni/* available after this
 # ----------------------- Now omni / carb / USD are available -----------------------
 import omni
 import carb
+
+# SILENCE THE SIM-TIME LOOKUP WARNINGS. Every RTX lidar and camera frame asks
+# isaacsim.core.simulation_manager for the sim time at that render frame, and it logs two
+# warnings per frame ("No adjacent samples found for interpolation", "getSimulationTimeMonotonicAtTime:
+# no data found ... returning current sim time"). The lookup can never succeed here: samples are only
+# recorded when Kit's playback loop steps physics, and Isaac Lab steps physics itself (measured: one
+# sample stored after 30 updates). The fallback it takes, the current sim time, is the correct stamp
+# for synchronous stepping, so the published timestamps are fine and only the log is affected. Errors
+# on this channel still print.
+carb.settings.get_settings().set_string("/log/channels/isaacsim.core.simulation_manager.plugin", "error")
 import gymnasium as gym
 import torch
 
@@ -167,6 +184,76 @@ _D1_GRIPPER_IDS = None
 
 # Set by the keyboard thread, consumed by the sim loop (which owns the tensors).
 ARM_RESUME_REQUESTED = False
+
+# Chase camera. On by default; C hands the viewport back to Isaac's own
+# navigation, which is otherwise overwritten by set_camera_view every frame.
+CAMERA_FOLLOW_ENABLED = True
+
+# The RTX sensor pipeline stamps each rendered frame by asking the simulation
+# manager for the sim time at that frame. Paused, PhysX records no new samples,
+# so every query fails to interpolate and logs a pair of warnings -- at render
+# rate, which buries the console in seconds. Nothing consumes those stamps while
+# paused (ROS publishing is gated on playing), so mute the one channel for the
+# duration rather than let it drown everything else.
+_SIM_TIME_LOG_CHANNEL = "isaacsim.core.simulation_manager.plugin"
+_SIM_TIME_MUTE_FAILED = False
+
+
+def _quiet_sim_time_warnings(quiet):
+    """Raise/restore the log threshold on the sim-time channel. Best effort."""
+    global _SIM_TIME_MUTE_FAILED
+    if _SIM_TIME_MUTE_FAILED:
+        return
+    try:
+        import carb.logging as _carb_logging
+
+        behavior = (
+            _carb_logging.LogSettingBehavior.OVERRIDE
+            if quiet
+            else _carb_logging.LogSettingBehavior.INHERIT
+        )
+        level = _carb_logging.LEVEL_ERROR if quiet else _carb_logging.LEVEL_WARN
+        _carb_logging.acquire_logging().set_level_threshold_for_source(
+            _SIM_TIME_LOG_CHANNEL, behavior, level
+        )
+        print(f"[pause] sim-time warnings {'muted' if quiet else 'restored'}")
+    except Exception as exc:
+        # Never let log plumbing take the sim down; just stop trying.
+        _SIM_TIME_MUTE_FAILED = True
+        print(f"[pause] Could not mute '{_SIM_TIME_LOG_CHANNEL}': {exc}")
+
+
+# Kept alive for the process lifetime; dropping it unsubscribes.
+_TIMELINE_EVENT_SUB = None
+
+
+def _subscribe_timeline_events():
+    """Mute the sim-time channel for as long as the timeline is paused.
+
+    env.step() blocks inside SimulationContext.step() while paused, so the main
+    loop never sees the pause edge and cannot do this itself. The timeline event
+    stream still pops during that internal render loop, so a subscription does.
+    """
+    global _TIMELINE_EVENT_SUB
+    try:
+        import omni.timeline
+
+        def _on_timeline_event(event):
+            if event.type == int(omni.timeline.TimelineEventType.PAUSE):
+                _quiet_sim_time_warnings(True)
+            elif event.type in (
+                int(omni.timeline.TimelineEventType.PLAY),
+                int(omni.timeline.TimelineEventType.STOP),
+            ):
+                _quiet_sim_time_warnings(False)
+
+        _TIMELINE_EVENT_SUB = (
+            omni.timeline.get_timeline_interface()
+            .get_timeline_event_stream()
+            .create_subscription_to_pop(_on_timeline_event)
+        )
+    except Exception as exc:
+        print(f"[pause] Could not subscribe to timeline events: {exc}")
 
 from isaacsim.core.utils.viewports import set_camera_view
 
@@ -755,10 +842,11 @@ def reset_robot_and_arm(env, d1_controller=None):
 #   Z              : return to zero pose (suspends IK; any arm key re-engages)
 #   P              : toggle motor power (e-stop)
 #   R              : reset robot + arm
+#   C              : toggle the chase camera (off = free Isaac viewport controls)
 def sub_keyboard_event(event, *args, **kwargs) -> bool:
     # Add ARM_TELEOP_YAW to the globals list here
     global ARM_TELEOP_ACTIVE, ARM_TELEOP_POS, ARM_TELEOP_ROT, ARM_TELEOP_YAW, RESET_REQUESTED
-    global GRIPPER_TELEOP_MM, ARM_RESUME_REQUESTED
+    global GRIPPER_TELEOP_MM, ARM_RESUME_REQUESTED, CAMERA_FOLLOW_ENABLED
     speed = 1.0
 
     if event.type in (carb.input.KeyboardEventType.KEY_PRESS, carb.input.KeyboardEventType.KEY_REPEAT):
@@ -773,7 +861,17 @@ def sub_keyboard_event(event, *args, **kwargs) -> bool:
         if event.input.name == 'T':
             toggle_lidar_debug_draw()
             return True
-        
+
+        # -------- C: chase camera on/off ----------
+        # Only on the initial press: KEY_REPEAT would flip it every frame while
+        # the key is held. Off leaves the viewport alone so Isaac's own orbit /
+        # pan / zoom controls take effect.
+        if event.input.name == 'C':
+            if event.type == carb.input.KeyboardEventType.KEY_PRESS:
+                CAMERA_FOLLOW_ENABLED = not CAMERA_FOLLOW_ENABLED
+                print(f"[camera] Follow {'ON' if CAMERA_FOLLOW_ENABLED else 'OFF (free viewport)'}")
+            return True
+
         # -------- , / . : D1 gripper ----------
         # Reads as < / > for close / open. Not G/H: H is Isaac's own hide
         # shortcut and firing both raises a warning in the viewport.
@@ -1041,6 +1139,48 @@ def _scope_env_cfg_to_legs(env_cfg):
         obs_term = getattr(env_cfg.observations.policy, term)
         obs_term.params = {"asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINTS)}
 
+    # The joint-space reward terms too, as D1Training's flat_env_cfg.py scopes
+    # them. Unscoped they sum the arm's 8 joints into the dog's torque and
+    # acceleration penalties, so the logged reward stops being comparable with a
+    # teleported or bare-Go2 run. Playback does not act on reward, so this
+    # changes no motion -- it keeps the numbers meaning the same thing.
+    for term in ("dof_torques_l2", "dof_acc_l2", "dof_pos_limits"):
+        rew_term = getattr(env_cfg.rewards, term, None)
+        if rew_term is None:
+            continue
+        params = dict(rew_term.params or {})
+        params["asset_cfg"] = SceneEntityCfg("robot", joint_names=LEG_JOINTS)
+        rew_term.params = params
+
+
+def _report_articulation(robot) -> None:
+    """Print what PhysX actually parsed, and refuse to run on a failed weld.
+
+    Worth the noise under `--arm_mount weld`: if the weld silently failed, the
+    arm comes up as its own articulation and this list comes back with only the
+    12 leg joints -- which is the difference between "the payload does not
+    affect the gait" and "there is no payload". The total mass is the other half
+    of the check: it should land near the bare Go2 plus `--arm_mass`.
+
+    Ported from D1Training's `sim.py`, where the mass model was measured.
+    """
+    names = list(robot.data.joint_names)
+    print(f"[robot] {len(names)} joints: {names}")
+    print(f"[robot] {len(robot.data.body_names)} bodies: {list(robot.data.body_names)}")
+    total_mass = float(robot.root_physx_view.get_masses()[0].sum())
+    print(f"[robot] total articulation mass: {total_mass:.3f} kg")
+    if not WELDED:
+        # Teleported, the arm is a separate articulation by design; its joints
+        # are expected to be absent from the Go2's.
+        return
+    missing = [n for n in D1_JOINT_NAMES + D1_GRIPPER_JOINTS if n not in names]
+    if missing:
+        raise RuntimeError(
+            f"[robot] The weld did not take: {missing} are absent from the Go2's "
+            f"articulation. PhysX most likely parsed the arm as a second "
+            f"articulation -- check that arm_weld.py stripped its ArticulationRootAPI."
+        )
+
 
 def setup_welded_arm(env_cfg):
     """Fold the arm into the Go2's articulation with a fixed joint.
@@ -1109,6 +1249,8 @@ def run_sim():
     else:
         print("[keys] Headless: keyboard teleop unavailable; the robot will stand still.")
 
+    _subscribe_timeline_events()
+
     # configure env
     env_cfg = UnitreeGo2CustomEnvCfg()
     if args_cli.robot == "g1":
@@ -1129,7 +1271,11 @@ def run_sim():
 
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg)
-    env = RslRlVecEnvWrapper(env)
+    # The action clip comes from the agent config, i.e. from whichever policy is loaded: it must
+    # match what that policy trained with. Rescue's policies train at +-20 because unclipped
+    # actions feed back through the last-action observation into a runaway (training/README.md,
+    # "The seeded benchmark"); normal output never exceeds ~11, so walking is unchanged.
+    env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.get("clip_actions"))
     _ENV_REF = env  # expose to checkpoint helpers
 
     global ROBOT_RESET_ROOT_POSE, ROBOT_RESET_JOINT_POS, ARM_RESET_JOINT_POS
@@ -1143,24 +1289,63 @@ def run_sim():
 
     print("[RESET] Captured startup robot root pose:", ROBOT_RESET_ROOT_POSE[0].detach().cpu().numpy())
 
-    arm = arm_articulation(env)
-    print("[ARM DEBUG] joint names:", arm.data.joint_names)
-    print("[ARM DEBUG] body names:", arm.data.body_names)
+    _report_articulation(robot)
 
     # load policy
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg["experiment_name"])
     log_root_path = os.path.abspath(log_root_path)
     resume_path = get_checkpoint_path(log_root_path, agent_cfg["load_run"], agent_cfg["load_checkpoint"])
     
+    print(f"[INFO]: Loading model checkpoint from: {resume_path}")
+
     ppo_runner = OnPolicyRunner(env, agent_cfg, log_dir=None, device=agent_cfg["device"])
     try:
         ppo_runner.load(resume_path, load_optimizer=False)
     except TypeError:
-        # Fallback for manual weight injection if rsl_rl API version differs
+        # Fallback for manual weight injection if rsl_rl API version differs.
+        print("[CHECKPOINT][WARN] load_optimizer=False not supported by this rsl_rl version.")
+        print("[CHECKPOINT][WARN] Loading actor/critic weights manually for inference.")
+
         import torch
         ckpt = torch.load(resume_path, map_location=agent_cfg["device"])
-        ppo_runner.alg.actor.load_state_dict(ckpt["actor_state_dict"], strict=True)
-        ppo_runner.alg.critic.load_state_dict(ckpt["critic_state_dict"], strict=True)
+
+        def _load_for_inference(module, state_dict, what):
+            """Load weights, dropping parameters this model does not have.
+
+            WHY THIS IS NOT strict=True. The actor built from `agent_cfg` is a plain
+            MLPModel -- `mlp.*` and an Identity normaliser, nothing else, because
+            `PPO.construct_algorithm` passes no `distribution_cfg`. A checkpoint trained
+            through Isaac Lab's `RslRlPpoActorCriticCfg` also carries
+            `distribution.std_param`, the action-noise std used for EXPLORATION during
+            training. Inference takes the mean action and never reads it.
+
+            Under strict=True that one extra key raises `Unexpected key(s) in state_dict`,
+            the exception escapes run_sim(), main.py's `finally` calls shutdown_app(), and
+            the whole thing presents as the simulator freezing ~9 s in with no traceback
+            anywhere near the cause. The 2026 rough policy in `agent_cfg.py` has that key;
+            the 2024 checkpoint it replaced did not, because `convert_checkpoint.py` had
+            rewritten it down to bare `mlp.*` keys. So strict=True was survivable here only
+            for as long as every checkpoint went through that script first.
+
+            Filtering to the model's own parameters is what makes ANY rsl_rl checkpoint of
+            the right shape loadable here without a manual conversion step. It stays safe
+            because SHAPE mismatches still raise: a checkpoint with the wrong observation
+            width or hidden dims fails loudly, which is the failure worth keeping.
+            """
+            own = module.state_dict()
+            usable = {k: v for k, v in state_dict.items() if k in own}
+            dropped = sorted(set(state_dict) - set(usable))
+            missing = sorted(set(own) - set(usable))
+            if dropped:
+                print(f"[CHECKPOINT][WARN] {what}: ignoring {dropped} (not in this model)")
+            if missing:
+                print(f"[CHECKPOINT][WARN] {what}: {missing} left at init -- NOT in checkpoint")
+            module.load_state_dict(usable, strict=False)
+
+        _load_for_inference(ppo_runner.alg.actor, ckpt["actor_state_dict"], "actor")
+        _load_for_inference(ppo_runner.alg.critic, ckpt["critic_state_dict"], "critic")
+
+    print(f"[INFO]: Loaded model checkpoint from: {resume_path}")
 
     policy = ppo_runner.get_inference_policy(device=env.unwrapped.device)
 
@@ -1268,6 +1453,12 @@ def run_sim():
         1.0 - 2.0 * (init_quat[2] * init_quat[2] + init_quat[3] * init_quat[3])
     ).clone()
     
+    # GUI pause needs no handling here. SimulationContext.step() already blocks
+    # in a render-only loop until the timeline plays again, and then issues the
+    # app.update() that re-informs the hydra delegate. Gating this loop on our
+    # own is_playing() check skips that refresh, and the robot stays frozen on
+    # screen while physics runs on underneath. Let env.step() do the blocking;
+    # pause-scoped side effects hang off the timeline events instead.
     while simulation_app.is_running():
 
         with torch.inference_mode():
@@ -1385,11 +1576,14 @@ def run_sim():
             world_eye = base_pos + quat_apply(yaw_quat, local_eye)[0]
             world_lookat = base_pos + quat_apply(yaw_quat, local_lookat)[0]
 
-            # Update the Omniverse viewport camera
-            set_camera_view(
-                eye=world_eye.cpu().numpy(),
-                target=world_lookat.cpu().numpy()
-            )
+            # Update the Omniverse viewport camera. The yaw above keeps tracking
+            # even while follow is off, so re-enabling with C picks the camera up
+            # behind the robot instead of swinging in from a stale angle.
+            if CAMERA_FOLLOW_ENABLED:
+                set_camera_view(
+                    eye=world_eye.cpu().numpy(),
+                    target=world_lookat.cpu().numpy()
+                )
             
             # --- OPTIMIZED ROS PUBLISHING ---
             ros_step_counter += 1
