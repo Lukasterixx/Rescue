@@ -21,6 +21,9 @@ class CatalogueTests(unittest.TestCase):
             self.assertEqual(level.spawn, tuple(lane.spawn))
             self.assertEqual(level.posture, lv.STANDING)
         self.assertEqual(lv.CUP_DEMO.posture, lv.LYING)
+        # The cup demo's robot stays lying; every lane lets it lie down and stand up.
+        self.assertTrue(lv.CUP_DEMO.posture_fixed)
+        self.assertFalse(any(level.posture_fixed for level in self.levels[:-1]))
 
     def test_the_cup_demo_sits_on_the_hall_floor_clear_of_every_lane(self):
         floor = ground_mesh(self.lanes)

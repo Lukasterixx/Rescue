@@ -190,6 +190,10 @@ class LevelManager:
         self.say(f"cup at ({xy_b[0]:.3f}, {xy_b[1]:.3f}) m from the robot, handle yaw {yaw_b_deg:.0f} deg")
 
     def _toggle(self) -> None:
+        if self.level.posture_fixed:
+            self.say(f"{self.level.title} keeps the robot {'lying down' if self.level.posture == lv.LYING else 'standing'}"
+                     f": load another level to walk")
+            return
         current = self.robot.data.joint_pos[0, self.leg_ids].detach().cpu().numpy()
         if self.posture.posture == lv.LYING:
             self.posture.begin(lv.STANDING, current, self.standing_legs)
@@ -270,7 +274,11 @@ class LevelManager:
             return
         for i, (button, level) in enumerate(zip(self._buttons, self.levels)):
             button.text = f"> {level.title}" if i == self.selection.current else level.title
-        self._posture_button.text = "Stand up" if self.posture.posture == lv.LYING else "Lie down"
+        self._posture_button.enabled = not self.level.posture_fixed
+        if self.level.posture_fixed:
+            self._posture_button.text = "Lying down" if self.level.posture == lv.LYING else "Standing"
+        else:
+            self._posture_button.text = "Stand up" if self.posture.posture == lv.LYING else "Lie down"
         self._cup_button.enabled = self.level.key == lv.CUP_DEMO.key
         self._light_button.enabled = self.light is not None
         self._light_button.text = "Wrist light: " + ("on" if self.light is not None and self.light.on else "off")

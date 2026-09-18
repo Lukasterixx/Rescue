@@ -6,7 +6,7 @@ This is the Go2 with its D1 arm and wrist RealSense, in the RoboCup Rescue compe
 cd ~/Rescue/Isaac/go2_omniverse
 ./run_sim.sh                               # windowed, starting on the Shifty Gravel lane
 ./run_sim.sh --level cup                   # start in the cup demo
-./run_sim.sh --headless --smoke-steps 700  # load every level, stand up and walk, then exit
+./run_sim.sh --headless --smoke-steps 800  # load every level, lie down and stand up, then exit
 ./run_sim.sh --help                        # every option
 ```
 
@@ -45,7 +45,7 @@ Nav2 and the behaviour tree are not reset; they can send commands straight away.
 
 The window also has these buttons:
 - **Reset level** (Home or R) reloads the current level. Page Down and Page Up load the next and previous level.
-- **Lie down / Stand up** (L) ramps the legs over 1.5 s, as a Go2 does on command. The walking policy has the legs only while the robot is standing.
+- **Lie down / Stand up** (L) ramps the legs over 1.5 s, as a Go2 does on command. The walking policy has the legs only while the robot is standing. The cup demo refuses it: the robot stays lying there and holds still, as in D1Training's pick scene.
 - **New cup position** (cup demo only) moves the cup somewhere else in D1Training's band. That band is 0.36–0.44 m ahead and ±0.10 m to the side, with the handle within 45° of pointing straight at or away from the robot.
 - **Wrist light** turns a lamp beside the wrist camera on or off (`--wrist-light` starts with it on). The maze's tarp leaves its inside dark, so the camera needs it there. D1Training's camera has no lamp, so it starts off, and the images are D1Training's until it is turned on.
 
@@ -145,7 +145,7 @@ Slow is safe for the arm. Its 10 Hz command hold counts sim time, and the VIP-Re
 
 **Checked on 2026-09-18:**
 - **Unit tests.** `python -m unittest discover -s rescue_sim/tests -t .` runs 32 of them: the firmware through its wire protocol, the levels and the posture ramp. They include parity with D1Training on fixed inputs (`tests/fixtures/d1training.json`, written by `tests/make_fixtures.py` from D1Training 5e19028): the planner's trajectories, the calibration's camera model, the mount, the depth noise and the case registration.
-- **Smoke run.** `--smoke-steps 700` loads all twelve levels, each within 5 cm of its start, then stands the lying robot up and walks. It turns the wrist light on for the maze. `--smoke-shots DIR` saves the wrist camera's image after each load.
+- **Smoke run.** `--smoke-steps 800` loads all twelve levels, each within 5 cm of its start. It asks the cup demo to stand up and checks that it stays lying. Then it goes back to the first lane, lies down, stands up and walks. It turns the wrist light on for the maze. `--smoke-shots DIR` saves the wrist camera's image after each load.
 - **The wrist light in the maze.** From a room under the tarp, the wrist camera's image averaged 55 of 255 with the light off and 102 with it on. The walls and fiducials are dim without it, not black.
 - **The cup pick end to end, as the robot runs it.** This is the unchanged C++ cup pick (`cup_pick_launch.py robot:=sim`), through `arm_bridge.py --sim` with the team's D1 driver. It found the cup from the survey look, planned an outside grasp and lifted it **11.9 cm** by `/sim/cup_pose`, in 22.7 s of sim time.
 - **`ArmToPose` and `ArmStow`.** They moved the arm to the wall scanner's shape, aimed at 0 and at 1 rad, and folded it back each time.

@@ -7,8 +7,8 @@ adds a level here.
 
 **The cup demo** is D1Training's pick scene (`demos/cup/pick_demo/scene.py`, commit 5e19028): the Go2 lying down,
 a 55 x 100 mm mug 42 cm ahead of it and 3 cm to its left, handle pointing away. Lying is Unitree's lie-down target
-from `unitree_ros2`'s `go2_stand_example.cpp`, held by the legs' own PD gains; the walking policy is off until the
-robot is stood up. It sits on the hall floor west of the first lane, facing away from the lanes, so nothing but
+from `unitree_ros2`'s `go2_stand_example.cpp`, held by the legs' own PD gains, and the robot stays lying there: the
+walking policy never has the legs and nothing stands it up (`posture_fixed`). It sits on the hall floor west of the first lane, facing away from the lanes, so nothing but
 floor is behind the cup.
 
 No Isaac imports: the runtime that applies these lives in `runtime.py`.
@@ -62,6 +62,8 @@ class Level:
     spawn_rotation: tuple[float, float, float, float]   # wxyz
     posture: str = STANDING
     subtitle: str = ""
+    # The robot keeps `posture` for as long as the level is loaded: lying down and standing up are refused.
+    posture_fixed: bool = False
 
     @property
     def yaw_deg(self) -> float:
@@ -80,6 +82,7 @@ CUP_DEMO = Level(
     (CUP_DEMO_BASE_XY[0], CUP_DEMO_BASE_XY[1], LYING_SPAWN_HEIGHT_M),
     yaw_quat_wxyz(CUP_DEMO_YAW_DEG), LYING,
     "D1Training's pick scene: the Go2 lying, a 55 x 100 mm mug 42 cm ahead",
+    posture_fixed=True,
 )
 
 

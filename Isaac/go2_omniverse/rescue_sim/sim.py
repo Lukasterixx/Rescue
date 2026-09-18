@@ -2,7 +2,7 @@
 
     ./run_sim.sh                              # the Shifty Gravel lane, windowed
     ./run_sim.sh --level cup                  # start in the cup demo
-    ./run_sim.sh --headless --smoke-steps 400 # load every level and stand up, lie down; then exit
+    ./run_sim.sh --headless --smoke-steps 800 # load every level, lie down and stand up; then exit
 
 Levels load at runtime from the "Rescue sim" window, Page Up/Down or /sim/level. WASD/QE drive the robot (or
 robot0/cmd_vel), and
@@ -399,16 +399,17 @@ def _subscribe_keys(manager, base_command):
 
 
 class _Smoke:
-    """`--smoke-steps`: load every level in turn, stand the lying robot up and lay it back down, and check that
-    nothing goes non-finite, that loads land where they should, and that the arm and the camera report. The wrist
-    light is on for the maze and off again after it."""
+    """`--smoke-steps`: load every level in turn, then go back to the first, lie down and stand up again. Checks that
+    nothing goes non-finite, that loads land where they should, that a level with a fixed posture keeps it when asked
+    to change it, and that the arm and the camera report. The wrist light is on for the maze and off again after."""
 
     SHOT_DELAY = 40            # steps after a load: the robot has settled and the camera has published
 
     def __init__(self, total: int, levels, shots=None, headless: bool = True):
         self.total, self.levels, self.count = total, levels, len(levels)
-        # Room after the last load for the stand-up ramp (75 steps) and some walking.
-        self.gap = max(10, (total - 100) // (self.count + 1))
+        # Every level, then back to the first, lie down and stand up: room after that for the stand-up ramp (75 steps)
+        # and some walking.
+        self.gap = max(10, (total - 100) // (self.count + 3))
         self.failures = []
         self.checked_loads = 0
         self.shots = Path(shots) if shots else None
@@ -416,7 +417,7 @@ class _Smoke:
         self.shot_at = None
         if self.shots is not None and self.gap <= self.SHOT_DELAY:
             print(f"[smoke] loads are {self.gap} steps apart, too close for shots {self.SHOT_DELAY} steps after each; "
-                  f"--smoke-steps {100 + (self.count + 1) * (self.SHOT_DELAY + 1)} leaves room", flush=True)
+                  f"--smoke-steps {100 + (self.count + 3) * (self.SHOT_DELAY + 1)} leaves room", flush=True)
 
     def drive(self, step: int, manager) -> None:
         if step and step % self.gap == 0:
@@ -425,7 +426,11 @@ class _Smoke:
                 manager.request_level(index)
                 manager.request_light(self.levels[index].key == "maze")
             elif index == self.count:
-                manager.request_posture_toggle()     # the last level is the cup demo: stand it up
+                manager.request_level(0)
+            elif index in (self.count + 1, self.count + 2):
+                manager.request_posture_toggle()     # lie down, then stand up again
+        elif step % self.gap == self.gap // 2 and manager.level.posture_fixed:
+            manager.request_posture_toggle()         # refused: the level keeps its posture
 
     def check(self, step: int, core, manager, d1, camera_pub, wrist) -> None:
         import torch
@@ -436,6 +441,9 @@ class _Smoke:
         robot = core.scene["robot"]
         if not torch.isfinite(robot.data.root_state_w).all():
             self.failures.append(f"non-finite robot state at step {step}")
+        level = manager.level
+        if level.posture_fixed and (manager.posture.posture != level.posture or manager.posture.walking):
+            self.failures.append(f"{level.key} left its fixed posture at step {step}")
         if manager.loads > self.checked_loads:
             self.checked_loads = manager.loads
             spawn = manager.level.spawn
