@@ -1,0 +1,3 @@
+# Built at startup from the sources in assets/ and competition/: the scene, the welded robot, the cup, the camera case.
+generated/
+__pycache__/

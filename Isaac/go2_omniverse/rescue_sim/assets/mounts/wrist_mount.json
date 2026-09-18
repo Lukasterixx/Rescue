@@ -1,0 +1,46 @@
+{
+  "schema": "d1training.wrist_mount/1",
+  "created_utc": "2026-09-17T08:39:40+00:00",
+  "frame": "the camera's colour optical frame, expressed in the arm's Link6 frame",
+  "convention": "optical axes ROS (x right, y down, z forward); rpy is ZYX, Rz(yaw)Ry(pitch)Rx(roll)",
+  "xyz_m": [
+    -0.061,
+    0.034,
+    0.067
+  ],
+  "rpy_deg": [
+    0.0,
+    0.0,
+    -90.0
+  ],
+  "pose_link6": [
+    [
+      0.0,
+      1.0,
+      0.0,
+      -0.061
+    ],
+    [
+      -1.0,
+      0.0,
+      -0.0,
+      0.034
+    ],
+    [
+      -0.0,
+      0.0,
+      1.0,
+      0.067
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "measured": false,
+  "method": "the operator aligned the CAD camera against the wrist in the console's 3D view; no target, no hand-eye procedure, no image evidence",
+  "source": "d1_ui mount editor on lukas-ROG-Zephyrus-G16-GA605WI-GA605WI",
+  "camera": "calibration d435i_238222076237_640x480.json"
+}

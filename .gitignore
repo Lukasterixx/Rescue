@@ -9,3 +9,5 @@ test_results.xml
 # from isaac-go2-ros2
 __pycache__
 outputs
+# The rescue sim: photos and videos from the wrist camera
+Isaac/go2_omniverse/photos/

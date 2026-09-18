@@ -1,94 +1,70 @@
 #!/usr/bin/env bash
+# The rescue sim: the Go2 with its D1 arm and wrist RealSense, the competition's lanes and D1Training's cup demo.
+#
+#   ./run_sim.sh                               # windowed, starting on the Shifty Gravel lane
+#   ./run_sim.sh --level cup                   # start in the cup demo, the Go2 lying beside a mug
+#   ./run_sim.sh --headless --smoke-steps 400  # load every level, stand up and walk, then exit
+#   ./run_sim.sh --help                        # every option
+#
+# Also launched by the VIP-Rescue website's Dev tab, from a non-interactive shell, so conda is found without PATH.
 set -e
 
-cd ~/Rescue/Isaac/go2_omniverse
+SIM_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SIM_DIR"
 
 CONDA_ENV_NAME="${ISAAC_SIM_CONDA_ENV:-env_isaaclab}"
 
-# Locate a conda installation even when `conda` isn't on PATH (e.g. when this
-# script is launched from a non-interactive shell such as the map web Dev tab).
 find_conda_base() {
   if [ -n "${CONDA_EXE:-}" ] && [ -x "$CONDA_EXE" ]; then
     dirname "$(dirname "$CONDA_EXE")"
     return 0
   fi
-
-  for candidate in \
-    "$HOME/miniconda3" \
-    "$HOME/anaconda3" \
-    "/opt/conda" \
-    "/usr/local/miniconda3" \
-    "/usr/local/anaconda3"; do
+  for candidate in "$HOME/miniconda3" "$HOME/anaconda3" /opt/conda /usr/local/miniconda3 /usr/local/anaconda3; do
     if [ -x "$candidate/bin/conda" ]; then
       printf '%s\n' "$candidate"
       return 0
     fi
   done
-
   if command -v conda >/dev/null 2>&1; then
     dirname "$(dirname "$(command -v conda)")"
     return 0
   fi
-
   return 1
 }
 
-activate_conda_env() {
-  local conda_base
+if [ "${CONDA_DEFAULT_ENV:-}" != "$CONDA_ENV_NAME" ]; then
   if ! conda_base="$(find_conda_base)"; then
     echo "[run_sim] Conda is not available. Install Miniconda or set CONDA_EXE/ISAAC_SIM_CONDA_ENV." >&2
-    return 127
+    exit 127
   fi
-
-  if [ -f "$conda_base/etc/profile.d/conda.sh" ]; then
-    # shellcheck disable=SC1090
-    . "$conda_base/etc/profile.d/conda.sh"
-  else
-    export PATH="$conda_base/bin:$PATH"
-    eval "$("$conda_base/bin/conda" shell.bash hook)"
-  fi
-
+  # Conda's activation scripts can trip over unset variables and failing commands.
+  set +e
+  # shellcheck disable=SC1091
+  . "$conda_base/etc/profile.d/conda.sh"
   conda activate "$CONDA_ENV_NAME"
-}
+  set -e
+fi
 
-activate_conda_env
+# Keep system ROS (Python 3.10) out of Isaac Sim's Python 3.11.
+unset PYTHONPATH AMENT_PREFIX_PATH COLCON_PREFIX_PATH CMAKE_PREFIX_PATH
 
-# Prevent system ROS Python 3.10 paths leaking into Isaac Sim's Python 3.11
-unset PYTHONPATH
-unset AMENT_PREFIX_PATH
-unset COLCON_PREFIX_PATH
-unset CMAKE_PREFIX_PATH
-
-# ROS 2 bridge config
+# The ROS 2 bridge: Isaac's bundled Humble libraries, Fast DDS, domain 0 unless told otherwise. The D1 arm's own DDS
+# traffic is separate (CycloneDDS, see rescue_sim/d1_arm.py) and does not care which RMW ROS uses.
 export ROS_DISTRO=humble
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
-export ROS_DOMAIN_ID=0
+export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"
 export ROS_LOCALHOST_ONLY=0
 unset CYCLONEDDS_URI CYCLONEDDS_HOME CYCLONEDDS_CONFIG ROS_DISCOVERY_SERVER
-
-# Use Isaac Sim's bundled ROS 2 bridge libraries, not /opt/ros/humble Python packages
 ISAAC_BRIDGE_EXT="$CONDA_PREFIX/lib/python3.11/site-packages/isaacsim/exts/isaacsim.ros2.bridge"
-export LD_LIBRARY_PATH="$ISAAC_BRIDGE_EXT/humble/lib:${LD_LIBRARY_PATH}"
+export LD_LIBRARY_PATH="$ISAAC_BRIDGE_EXT/humble/lib:${LD_LIBRARY_PATH:-}"
+if [ -f /usr/lib/x86_64-linux-gnu/libstdc++.so.6 ]; then
+  export LD_PRELOAD="/usr/lib/x86_64-linux-gnu/libstdc++.so.6${LD_PRELOAD:+:$LD_PRELOAD}"
+fi
 
-# Optional, but often still needed on Ubuntu
-export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libstdc++.so.6
-
-# RTX lidar config location for Isaac Sim 5.x
+# RTX lidar config location for Isaac Sim 5.x.
 LIDAR_CONFIG_DIR="$CONDA_PREFIX/lib/python3.11/site-packages/isaacsim/exts/isaacsim.sensors.rtx/data/lidar_configs"
 mkdir -p "$LIDAR_CONFIG_DIR"
 cp -f ./Isaac_sim/Unitree/Unitree_L1.json "$LIDAR_CONFIG_DIR/"
 
-# Any extra arguments are forwarded to main.py. Notably:
-#   --arm_mount weld       the D1 is part of the Go2's articulation, so its mass
-#                          reaches the walking policy. Default.
-#   --arm_mount teleport   the original behaviour: the arm is its own
-#                          articulation, pinned to the dog's back every step.
-#                          Keeps it in place, but it is dynamically a ghost.
-#   --arm_mass 3.152       D1 mass in kg (weld only). Defaults to Unitree's spec.
-# --enable_cameras is required because add_camera() builds an IsaacLab Camera
-# sensor. Its initialisation is deferred to the next timeline "play" event, and
-# at startup the timeline is already playing -- so without the flag the sensor
-# sat uninitialised and nothing complained. The first press of Play in the GUI
-# fires that event, the sensor refuses to initialise without the flag, and the
-# error surfaces out of the following env.step().
-python main.py --enable_cameras --robot_amount 1 --robot go2 --terrain rough --custom_env maze "$@"
+export PYTHONDONTWRITEBYTECODE=1
+exec python main.py "$@"
