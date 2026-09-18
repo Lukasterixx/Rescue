@@ -3,8 +3,11 @@ VIP-Rescue: a stand-in bridge script plays the real one."""
 import os
 from pathlib import Path
 import socket
+import subprocess
+import sys
 import tempfile
 import textwrap
+import time
 import unittest
 from unittest import mock
 
@@ -19,6 +22,9 @@ FAKE_BRIDGE = textwrap.dedent('''
     args = parser.parse_args()
     assert args.sim, "the sim must start the bridge in --sim mode"
     print("fake bridge: driver at", os.environ["D1_DRIVER_ROOT"], flush=True)
+    # The real bridge talks a lot, not all of it ASCII: 200 kB of it before listening, more than any pipe holds.
+    for i in range(2000):
+        print(f"line {i} \u2014 connected to the simulated arm \u2014 manual control " + "x" * 40, flush=True)
     server = socket.socket()
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind((args.host, args.port))
@@ -88,8 +94,9 @@ class LifecycleTests(unittest.TestCase):
         self.port = free_port()
 
     def test_starts_listens_and_stops(self):
-        bridge = br.ArmBridge(self.script, self.dir, port=self.port)
+        bridge = br.ArmBridge(self.script, self.dir, port=self.port, log_path=self.dir / "bridge.log")
         self.assertTrue(bridge.start())
+        self.assertIn("\u2014 connected to the simulated arm", (self.dir / "bridge.log").read_text(encoding="utf-8"))
         self.assertTrue(br.listening("127.0.0.1", self.port))
         pid = bridge.process.pid
         br.stop_all()
@@ -97,11 +104,28 @@ class LifecycleTests(unittest.TestCase):
         with self.assertRaises(ProcessLookupError):
             os.kill(pid, 0)
 
+    def test_dies_with_the_sim_even_when_the_sim_skips_its_cleanup(self):
+        # Closing Isaac's window ends the sim without its `finally`: the bridge must not outlive it.
+        parent = textwrap.dedent(f'''
+            import os, sys
+            sys.path.insert(0, {str(Path(__file__).resolve().parents[2])!r})
+            from rescue_sim import bridge as br
+            b = br.ArmBridge({str(self.script)!r}, {str(self.dir)!r}, port={self.port}, log_path={str(self.dir / 'bridge.log')!r})
+            assert b.start()
+            os._exit(0)
+        ''')
+        subprocess.run([sys.executable, "-c", parent], check=True, timeout=30, capture_output=True)
+        for _ in range(50):
+            if not br.listening("127.0.0.1", self.port):
+                break
+            time.sleep(0.1)
+        self.assertFalse(br.listening("127.0.0.1", self.port), "the bridge outlived the sim that started it")
+
     def test_leaves_a_bridge_that_is_already_there(self):
-        first = br.ArmBridge(self.script, self.dir, port=self.port)
+        first = br.ArmBridge(self.script, self.dir, port=self.port, log_path=self.dir / "bridge.log")
         self.assertTrue(first.start())
         try:
-            second = br.ArmBridge(self.script, self.dir, port=self.port)
+            second = br.ArmBridge(self.script, self.dir, port=self.port, log_path=self.dir / "bridge.log")
             self.assertFalse(second.start())
             self.assertIsNone(second.process)
         finally:

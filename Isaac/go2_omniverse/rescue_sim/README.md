@@ -77,7 +77,7 @@ In the VIP-Rescue stack that is `maps/arm_bridge.py --sim`, the bridge the robot
 - `ArmToPose` and `ArmStow` use it too.
 - Their inverse kinematics runs in C++ (`go2_control_cpp/src/d1_arm`).
 
-The sim finds the bridge under `$VIP_RESCUE_ROOT` (default `~/VIP-Rescue`) and the driver in that repo's `Docker/unitree-d1-control` submodule (`git submodule update --init Docker/unitree-d1-control` once; `$D1_DRIVER_ROOT` points elsewhere). If a bridge is already listening on 8084, the sim leaves it to serve the arm and starts none. `--arm-bridge off` starts none; `--arm-bridge PATH` starts another script.
+The sim finds the bridge under `$VIP_RESCUE_ROOT` (default `~/VIP-Rescue`) and the driver in that repo's `Docker/unitree-d1-control` submodule (`git submodule update --init Docker/unitree-d1-control` once; `$D1_DRIVER_ROOT` points elsewhere). If a bridge is already listening on 8084, the sim leaves it to serve the arm and starts none. `--arm-bridge off` starts none; `--arm-bridge PATH` starts another script. The bridge logs to `rescue_sim/generated/arm_bridge.log`, and it exits with the sim, even when the window is closed.
 
 The sim-side IK controller and `/arm_commands` are gone.
 
@@ -146,7 +146,7 @@ Slow is safe for the arm. Its 10 Hz command hold counts sim time, and the VIP-Re
 ## Checked, and not
 
 **Checked on 2026-09-18:**
-- **Unit tests.** `python -m unittest discover -s rescue_sim/tests -t .` runs 37 of them: the firmware through its wire protocol, the levels, the posture ramp, and starting and stopping the arm bridge. They include parity with D1Training on fixed inputs (`tests/fixtures/d1training.json`, written by `tests/make_fixtures.py` from D1Training 5e19028): the planner's trajectories, the calibration's camera model, the mount, the depth noise and the case registration.
+- **Unit tests.** `python -m unittest discover -s rescue_sim/tests -t .` runs 38 of them: the firmware through its wire protocol, the levels, the posture ramp, and starting and stopping the arm bridge. They include parity with D1Training on fixed inputs (`tests/fixtures/d1training.json`, written by `tests/make_fixtures.py` from D1Training 5e19028): the planner's trajectories, the calibration's camera model, the mount, the depth noise and the case registration.
 - **Smoke run.** `--smoke-steps 800` loads all twelve levels, each within 5 cm of its start. It asks the cup demo to stand up and checks that it stays lying. Then it goes back to the first lane, lies down, stands up and walks. It turns the wrist light on for the maze. `--smoke-shots DIR` saves the wrist camera's image after each load.
 - **The wrist light in the maze.** From a room under the tarp, the wrist camera's image averaged 55 of 255 with the light off and 102 with it on. The walls and fiducials are dim without it, not black.
 - **The cup pick end to end, as the robot runs it.** This is the unchanged C++ cup pick (`cup_pick_launch.py robot:=sim`), through `arm_bridge.py --sim` with the team's D1 driver. It found the cup from the survey look, planned an outside grasp and lifted it **11.9 cm** by `/sim/cup_pose`, in 22.7 s of sim time.
