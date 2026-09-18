@@ -4,7 +4,8 @@
     ./run_sim.sh --level cup                  # start in the cup demo
     ./run_sim.sh --headless --smoke-steps 400 # load every level and stand up, lie down; then exit
 
-Levels load at runtime from the "Rescue sim" window or F1..Fn. WASD/QE drive the robot (or robot0/cmd_vel), and
+Levels load at runtime from the "Rescue sim" window, Page Up/Down or /sim/level. WASD/QE drive the robot (or
+robot0/cmd_vel), and
 the viewport is Isaac's own: move it yourself, or pick "asset root" in Isaac Lab's viewer settings to follow the
 robot. The arm is not driven by anything in here; see `d1_arm.py` for how to drive it and what it does.
 """
@@ -36,7 +37,8 @@ def parse_args(argv=None):
     parser.add_argument("--smoke-steps", type=int, default=0,
                         help="run this many policy steps, loading every level on the way, then exit (>= 300)")
     parser.add_argument("--smoke-shots", default=None, metavar="DIR",
-                        help="with --smoke-steps in a window: save the viewport to DIR after each level loads")
+                        help="with --smoke-steps: save the wrist camera's image (and in a window the viewport) to DIR "
+                             "after each level loads")
     parser.add_argument("--realtime", action=argparse.BooleanOptionalAction, default=True,
                         help="never run faster than real time (default on): the arm's 10 Hz bridge runs on "
                              "the wall clock")
@@ -60,6 +62,8 @@ def parse_args(argv=None):
     parser.add_argument("--depth-noise", action=argparse.BooleanOptionalAction, default=True,
                         help="stereo noise on the published depth (range limits apply either way)")
     parser.add_argument("--camera-hz", type=float, default=15.0, help="wrist camera publishing rate on ROS")
+    parser.add_argument("--wrist-light", action="store_true",
+                        help="start with the lamp beside the wrist camera on (the window toggles it)")
     parser.add_argument("--profile", action="store_true", help="print where each step's time goes, every 10 s")
     cli_args.add_rsl_rl_args(parser)
     AppLauncher.add_app_launcher_args(parser)
@@ -147,7 +151,7 @@ def run(args, simulation_app):
     from agent_cfg import unitree_go2_agent_cfg as agent_cfg
     from arm_weld import build_welded_robot_usd
     from competition.build import TERRAIN_PATH, export_scene, options_from_args
-    from competition.runtime import GravelReset
+    from competition.runtime import loose_resets
 
     from rescue_sim import d1_model, env_cfg as envs, levels as lv
     from rescue_sim.camera_asset import build_camera_usd
@@ -237,10 +241,15 @@ def run(args, simulation_app):
     camera_pub = WristCameraPublisher(ros.node, camera, np.random.default_rng(args.seed) if args.depth_noise else None,
                                       intrinsics=intrinsics)
 
-    gravel = GravelReset(lanes) if options.gravel == "dynamic" else None
-    if gravel is not None:
-        gravel.bind()
-    manager = LevelManager(env, levels, d1, ros, start=start, gravel=gravel, seed=args.seed, headless=args.headless)
+    loose = loose_resets(lanes, options)
+    for family in loose:
+        family.bind()
+    import isaaclab.sim as sim_utils
+
+    light = WristLight(sim_utils.find_matching_prim_paths(core.scene["wrist_cam"].cfg.prim_path)[0],
+                       on=args.wrist_light)
+    manager = LevelManager(env, levels, d1, ros, start=start, loose=loose, light=light, seed=args.seed,
+                           headless=args.headless)
     manager.build_window()
     keyboard = None
     if not args.headless:
@@ -251,7 +260,7 @@ def run(args, simulation_app):
     cup_object = core.scene["cup"]
     step_dt = core.step_dt
     camera_every = max(1, round(1.0 / (args.camera_hz * step_dt)))
-    smoke = _Smoke(args.smoke_steps, len(levels), None if args.headless else args.smoke_shots) if args.smoke_steps else None
+    smoke = _Smoke(args.smoke_steps, levels, args.smoke_shots, args.headless) if args.smoke_steps else None
     steps = 0
     obs = env.get_observations()
     stop = threading.Event()
@@ -283,7 +292,7 @@ def run(args, simulation_app):
                     ros.save_images(rgb, 1.0 / (camera_every * step_dt))
                     rate.mark("camera")
                 if smoke is not None:
-                    smoke.check(steps, core, manager, d1, camera_pub)
+                    smoke.check(steps, core, manager, d1, camera_pub, wrist)
                     if smoke.done(steps):
                         break
             if args.realtime:
@@ -299,6 +308,40 @@ def run(args, simulation_app):
         env.close()
     if smoke is not None:
         smoke.report(steps)
+
+
+class WristLight:
+    """A lamp beside the wrist camera, off unless asked for.
+
+    D1Training's camera has no lamp, so with it off the images are D1Training's. The maze needs it: its tarp leaves
+    the inside dark. It is a small spot on the camera prim, which looks down its -Z with +Y up (USD's camera axes, as
+    a light's are). It sits 3 cm above the lens and 2 cm ahead of it, so the case does not shade it and the image
+    does not see it.
+    """
+
+    INTENSITY = 3.2e7          # the old sim's end-effector flashlight (5e5 at 2 stops over a 4 cm bulb), on 1 cm
+    CONE_DEG = 40.0
+
+    def __init__(self, camera_prim_path: str, on: bool = False):
+        import omni.usd
+        from pxr import Gf, UsdGeom, UsdLux
+
+        stage = omni.usd.get_context().get_stage()
+        light = UsdLux.SphereLight.Define(stage, camera_prim_path + "/wrist_light")
+        light.CreateRadiusAttr(0.01)
+        light.CreateColorAttr(Gf.Vec3f(1.0, 0.96, 0.85))
+        shaping = UsdLux.ShapingAPI.Apply(light.GetPrim())
+        shaping.CreateShapingConeAngleAttr(self.CONE_DEG)
+        shaping.CreateShapingConeSoftnessAttr(0.3)
+        UsdGeom.Xformable(light.GetPrim()).AddTranslateOp().Set(Gf.Vec3d(0.0, 0.03, -0.02))
+        self._intensity = light.CreateIntensityAttr(0.0)
+        self.path = str(light.GetPath())
+        self.on = False
+        self.set(on)
+
+    def set(self, on: bool) -> None:
+        self._intensity.Set(self.INTENSITY if on else 0.0)
+        self.on = bool(on)
 
 
 class _Rate:
@@ -357,26 +400,34 @@ def _subscribe_keys(manager, base_command):
 
 class _Smoke:
     """`--smoke-steps`: load every level in turn, stand the lying robot up and lay it back down, and check that
-    nothing goes non-finite, that loads land where they should, and that the arm and the camera report."""
+    nothing goes non-finite, that loads land where they should, and that the arm and the camera report. The wrist
+    light is on for the maze and off again after it."""
 
-    def __init__(self, total: int, count: int, shots=None):
-        self.total, self.count = total, count
+    SHOT_DELAY = 40            # steps after a load: the robot has settled and the camera has published
+
+    def __init__(self, total: int, levels, shots=None, headless: bool = True):
+        self.total, self.levels, self.count = total, levels, len(levels)
         # Room after the last load for the stand-up ramp (75 steps) and some walking.
-        self.gap = max(10, (total - 100) // (count + 1))
+        self.gap = max(10, (total - 100) // (self.count + 1))
         self.failures = []
         self.checked_loads = 0
         self.shots = Path(shots) if shots else None
+        self.headless = headless
         self.shot_at = None
+        if self.shots is not None and self.gap <= self.SHOT_DELAY:
+            print(f"[smoke] loads are {self.gap} steps apart, too close for shots {self.SHOT_DELAY} steps after each; "
+                  f"--smoke-steps {100 + (self.count + 1) * (self.SHOT_DELAY + 1)} leaves room", flush=True)
 
     def drive(self, step: int, manager) -> None:
         if step and step % self.gap == 0:
             index = step // self.gap
             if index < self.count:
                 manager.request_level(index)
+                manager.request_light(self.levels[index].key == "maze")
             elif index == self.count:
                 manager.request_posture_toggle()     # the last level is the cup demo: stand it up
 
-    def check(self, step: int, core, manager, d1, camera_pub) -> None:
+    def check(self, step: int, core, manager, d1, camera_pub, wrist) -> None:
         import torch
 
         self.arm_feedback = d1.firmware.step
@@ -392,22 +443,36 @@ class _Smoke:
             if math.dist(got, spawn[:2]) > 0.05:
                 self.failures.append(f"load of {manager.level.key} put the robot at {got}, not {spawn[:2]}")
             print(f"[smoke] loaded {manager.level.key}: robot at ({got[0]:.2f}, {got[1]:.2f})", flush=True)
-            self.shot_at = (step + 40, manager.level.key)
+            self.shot_at = (step + self.SHOT_DELAY, manager.level.key)
         if self.shots is not None and self.shot_at is not None and step == self.shot_at[0]:
-            from omni.kit.viewport.utility import capture_viewport_to_file, get_active_viewport
+            self._shoot(self.shot_at[1], manager, wrist)
 
-            self.shots.mkdir(parents=True, exist_ok=True)
-            path = self.shots / f"{len(list(self.shots.glob('*.png'))):02d}_{self.shot_at[1]}.png"
-            capture_viewport_to_file(get_active_viewport(), str(path))
-            try:
-                # The whole window, the level window included.
-                import omni.renderer_capture
+    def _shoot(self, key: str, manager, wrist) -> None:
+        import numpy as np
+        from PIL import Image
 
-                omni.renderer_capture.acquire_renderer_capture_interface().capture_next_frame_swapchain(
-                    str(path.with_name(path.stem + "_window.png")))
-            except Exception as exc:
-                print(f"[smoke] no window capture: {exc}", flush=True)
-            print(f"[smoke] viewport -> {path}", flush=True)
+        self.shots.mkdir(parents=True, exist_ok=True)
+        stem = f"{len(list(self.shots.glob('*_wrist.png'))):02d}_{key}"
+        rgb = wrist.data.output["rgb"][0, ..., :3].detach().cpu().numpy().astype(np.uint8)
+        Image.fromarray(rgb).save(self.shots / f"{stem}_wrist.png")
+        light = manager.light is not None and manager.light.on
+        print(f"[smoke] wrist camera -> {self.shots / (stem + '_wrist.png')} (light {'on' if light else 'off'}, "
+              f"mean {rgb.mean():.1f})", flush=True)
+        if self.headless:
+            return
+        from omni.kit.viewport.utility import capture_viewport_to_file, get_active_viewport
+
+        path = self.shots / f"{stem}.png"
+        capture_viewport_to_file(get_active_viewport(), str(path))
+        try:
+            # The whole window, the level window included.
+            import omni.renderer_capture
+
+            omni.renderer_capture.acquire_renderer_capture_interface().capture_next_frame_swapchain(
+                str(path.with_name(path.stem + "_window.png")))
+        except Exception as exc:
+            print(f"[smoke] no window capture: {exc}", flush=True)
+        print(f"[smoke] viewport -> {path}", flush=True)
 
     def done(self, step: int) -> bool:
         return step >= self.total

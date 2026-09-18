@@ -3,7 +3,7 @@
 #
 #   ./run_sim.sh                               # windowed, starting on the Shifty Gravel lane
 #   ./run_sim.sh --level cup                   # start in the cup demo, the Go2 lying beside a mug
-#   ./run_sim.sh --headless --smoke-steps 400  # load every level, stand up and walk, then exit
+#   ./run_sim.sh --headless --smoke-steps 700  # load every level, stand up and walk, then exit
 #   ./run_sim.sh --help                        # every option
 #
 # Also launched by the VIP-Rescue website's Dev tab, from a non-interactive shell, so conda is found without PATH.

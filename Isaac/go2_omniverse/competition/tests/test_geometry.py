@@ -8,13 +8,14 @@ import numpy as np
 from competition.geometry import (
     ACUITY_TARGETS,
     DECK,
+    LANE_ORIGINS,
     OSB,
+    PALLET_TOP,
     TASK_ELEVATION,
     Options,
     build_lanes,
     stone_shape,
 )
-from competition.runtime import Selection
 
 
 class LaneGeometryTests(unittest.TestCase):
@@ -203,20 +204,191 @@ class LaneGeometryTests(unittest.TestCase):
                 Options(k_rail_height=value)
 
 
-class SelectionTests(unittest.TestCase):
-    def test_cycle_wraps_and_accumulates_before_physics_tick(self):
-        selection = Selection(2)
-        selection.cycle(-1)
-        self.assertEqual(selection.pending, 1)
-        self.assertEqual(selection.current, 0)
-        selection.cycle(1)
-        self.assertEqual(selection.consume(), 0)
-        selection.select(1)
-        self.assertEqual(selection.consume(), 1)
-        self.assertIsNone(selection.pending)
-        self.assertEqual(selection.consume(), 1)
-        with self.assertRaises(IndexError):
-            selection.select(2)
+class RemainingLaneTests(unittest.TestCase):
+    """The eight lanes added after gravel, K-Rails and the square."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.lanes = {lane.key: lane for lane in build_lanes()}
+        cls.slopes = {lane.key: lane for lane in build_lanes(Options(difficulty="slopes"))}
+
+    def named(self, key, prefix="", suffix=""):
+        return [m for m in self.lanes[key].meshes if m.name.startswith(prefix) and m.name.endswith(suffix)]
+
+    def test_catalogue_order_origins_and_pads(self):
+        self.assertEqual(list(self.lanes), list(LANE_ORIGINS))
+        xs = [lane.origin[0] for lane in self.lanes.values()]
+        self.assertEqual(xs, sorted(xs))
+        for key, lane in self.lanes.items():
+            pad = next(m for m in lane.meshes if m.name == "entry_pad")
+            self.assertAlmostEqual(lane.spawn[2] - pad.vertices[:, 2].max(), 0.42, msg=key)
+            lo, hi = pad.vertices.min(axis=0), pad.vertices.max(axis=0)
+            self.assertTrue(np.all(np.array(lane.spawn[:2]) - 0.25 > lo[:2]), key)
+            self.assertTrue(np.all(np.array(lane.spawn[:2]) + 0.25 < hi[:2]), key)
+        # Lanes never overlap along the hall.
+        spans = sorted((np.min([m.vertices[:, 0].min() for m in lane.meshes]), np.max([m.vertices[:, 0].max() for m in lane.meshes])) for lane in self.lanes.values())
+        for (_, right), (left, _) in zip(spans, spans[1:]):
+            self.assertLess(right, left)
+
+    def test_stepfields_three_elevations(self):
+        tops = self.named("stepfields", suffix="_top")
+        self.assertEqual(len(self.named("stepfields", suffix="_base")), 32)
+        heights = sorted({round(float(m.vertices[:, 2].max() - DECK - OSB), 3) for m in tops})
+        self.assertEqual(heights, [0.15, 0.30])
+        self.assertEqual(len(tops), 16 * 3 + 16)  # quads carry three plateaus, singles one
+        self.assertTrue(all(np.allclose(np.ptp(m.vertices[:, :2], axis=0), 0.297) for m in tops))
+
+    def test_ramps_are_fifteen_degree_wedges_in_peaks_and_valleys(self):
+        ramps = self.named("ramps", suffix="_r0") + self.named("ramps", suffix="_r1") + self.named("ramps", suffix="_r2") + self.named("ramps", suffix="_r3")
+        self.assertEqual(len(ramps), 32)
+        for ramp in ramps:
+            z = ramp.vertices[:, 2] - DECK
+            self.assertAlmostEqual(z.max(), OSB + 0.15)
+            self.assertAlmostEqual(z.min(), OSB)  # on the half-panel backing
+            self.assertAlmostEqual(math.degrees(math.atan((0.15 - OSB) / 0.594)), 13.2, places=0)
+        # A peak's four high edges lie on the element's centre lines; the first element of
+        # the first floor is a peak, and the lower floor's first is a valley.
+        meshes = self.lanes["ramps"].meshes
+        for name, peak in (("blue_end_ramps00", True), ("lower_ramps00", False)):
+            backing = next(m for m in meshes if m.name == f"{name}_backing")
+            centre = backing.vertices[:, :2].mean(axis=0)
+            element = [m for m in ramps if m.name.startswith(name)]
+            high = np.concatenate([m.vertices[m.vertices[:, 2] > DECK + 0.1][:, :2] for m in element])
+            on_centre_lines = np.abs(high - centre).min(axis=1).max() < 0.01
+            self.assertEqual(on_centre_lines, peak, name)
+
+    def test_alleys_three_slalom_doorways(self):
+        lane = self.lanes["alleys"]
+        # Twelve perimeter railings and three dividers; no standard end barriers (p. 44).
+        self.assertEqual(lane.railing_count, 15)
+        self.assertFalse([m for m in lane.meshes if "end_barrier" in m.name])
+        panels = self.named("alleys", suffix="_panel")
+        self.assertEqual(len(panels), 3)
+        for k, panel in enumerate(panels):
+            y = panel.vertices[:, 1]
+            gap = y.min() + 1.2 if k % 2 == 0 else 1.2 - y.max()  # south, north, south
+            self.assertAlmostEqual(gap, 0.45)
+            self.assertAlmostEqual(np.ptp(panel.vertices[:, 2]), 0.8)
+        wide = build_lanes(Options(alley_width=0.8))[5]
+        panel = next(m for m in wide.meshes if m.name == "divider0_panel")
+        self.assertAlmostEqual(panel.vertices[:, 1].min() + 1.2, 0.8)
+        self.assertEqual(self.slopes["alleys"].railing_count, 15)
+        # Under slopes the far floors rise together toward the far end (a side slope for
+        # the hallways); the door-end floors stay flat.
+        floors = {f.name: f for f in self.slopes["alleys"].floors}
+        self.assertEqual(floors["far_north"].pitch, floors["far_south"].pitch)
+        self.assertGreater(floors["far_north"].pitch, 0)
+        self.assertEqual(floors["blue_end"].pitch, floors["second"].pitch)
+        self.assertEqual(floors["second"].pitch, 0.0)
+        # ...hinged to the flat floor at x = 0, with no slot between them.
+        for name in ("far_north", "far_south"):
+            low_edge = floors[name].transform([[-1.2, 0.0, 0.0]])[0]
+            self.assertAlmostEqual(low_edge[0], 0.0)
+            self.assertAlmostEqual(low_edge[2], DECK)
+
+    def test_alleys_every_divider_line_has_its_doorway(self):
+        # Regression: the first divider was sealed, its doorway landing on the standard
+        # lane's end barrier. Walk along each divider line and find where it is open.
+        for lanes in (self.lanes, self.slopes):
+            lane = lanes["alleys"]
+            ox = lane.origin[0]
+            floor_parts = ("_osb", "_frame_long_", "_joist_", "_leg_", "_leg_brace")
+            solid = [
+                m
+                for m in lane.meshes
+                if m.collision and not any(part in m.name for part in floor_parts)
+            ]
+            ys = np.linspace(-1.15, 1.15, 231)
+            sides = []
+            for x in (-1.2, 0.0, 1.2):
+                blocked = np.zeros(len(ys), bool)
+                for m in solid:
+                    lo, hi = m.vertices.min(axis=0), m.vertices.max(axis=0)
+                    if lo[0] - ox <= x + 0.05 and hi[0] - ox >= x - 0.05:
+                        blocked |= (ys >= lo[1]) & (ys <= hi[1])
+                free = ys[~blocked]
+                self.assertTrue(len(free), f"divider at x = {x} is closed")
+                self.assertTrue(np.all(np.diff(free) < 0.011), f"x = {x}: gap not contiguous")
+                self.assertGreater(np.ptp(free) + 0.05, 0.40, f"x = {x}: doorway too narrow")
+                sides.append("north" if free.mean() > 0 else "south")
+            self.assertEqual(sides, ["south", "north", "south"])
+
+    def test_pallets_two_raised_cells_with_pipes(self):
+        osb = self.named("pallets", suffix="_osb")
+        self.assertEqual(len([m for m in osb if "pallet" in m.name]), 10)
+        upper = [m for m in osb if m.name.endswith("_upper_osb")]
+        self.assertEqual(len(upper), 2)
+        for m in upper:
+            self.assertAlmostEqual(m.vertices[:, 2].min() - DECK, PALLET_TOP)
+        pipes = self.named("pallets", prefix="pipe_", suffix="_pipe0")
+        self.assertEqual(len(pipes), 4)
+        for pipe in pipes:
+            self.assertAlmostEqual(pipe.vertices[:, 2].min() - DECK, PALLET_TOP, places=3)
+
+    def test_door_leaf_is_sprung_and_floor_options_remove_steps(self):
+        lane = self.lanes["doors"]
+        leaf = next(m for m in lane.meshes if m.name == "door_leaf")
+        self.assertTrue(leaf.dynamic)
+        self.assertEqual(len(lane.joints), 1)
+        hinge = lane.joints[0]
+        self.assertEqual((hinge.body0, hinge.body1), ("stud2", "door_leaf"))
+        self.assertAlmostEqual(hinge.pivot[1] - lane.origin[1], 1.05)
+        self.assertGreater(hinge.stiffness, 0)
+        self.assertAlmostEqual(np.ptp(leaf.vertices[:, 2]), 2.0)
+        names = {m.name for m in lane.meshes}
+        self.assertTrue({"square_step_west", "half_step_east", "base"} <= names)
+        for choice, missing in (("square", "square_step_west"), ("half", "half_step_east")):
+            lane = build_lanes(Options(door_floor=choice))[7]
+            self.assertNotIn(missing, {m.name for m in lane.meshes})
+            self.assertIn("base", {m.name for m in lane.meshes})
+
+    def test_avoid_posts_are_loose_pairs_on_a_meander(self):
+        lane = self.lanes["avoid"]
+        posts = lane.dynamic_meshes()
+        self.assertEqual(len(posts), 10)
+        self.assertTrue(all(m.name.startswith("post_") and m.mass > 0 for m in posts))
+        pairs = [posts[i : i + 2] for i in range(0, 10, 2)]
+        for a, b in pairs:
+            gap = np.linalg.norm(a.vertices.mean(axis=0)[:2] - b.vertices.mean(axis=0)[:2])
+            self.assertAlmostEqual(gap, 0.90)
+            self.assertAlmostEqual(a.vertices[:, 2].min(), 0.14)
+        self.assertEqual(len(self.named("avoid", suffix="_stringer0")), 10)
+
+    def test_stairs_landing_and_pallet_climb(self):
+        lane = self.lanes["stairs"]
+        for k in range(1, 6):
+            tread = next(m for m in lane.meshes if m.name == f"tread{k}")
+            self.assertAlmostEqual(tread.vertices[:, 2].max(), 0.2 * k)
+            self.assertAlmostEqual(np.ptp(tread.vertices[:, 0]), 0.9)
+        landing = next(m for m in lane.meshes if m.name == "landing_osb")
+        self.assertAlmostEqual(landing.vertices[:, 2].max(), 1.0)
+        tops = [max(m.vertices[:, 2].max() for m in lane.meshes if m.name.startswith(f"stack{i}_pallet")) for i in range(3)]
+        np.testing.assert_allclose(tops, [7 * PALLET_TOP, 4 * PALLET_TOP, PALLET_TOP])
+        self.assertEqual(len(self.named("stairs", prefix="stack", suffix="_pipes_pipe2")), 3)
+        shallow = build_lanes(Options(stair_angle=35.0, stair_debris=3))[9]
+        run = 0.2 / math.tan(math.radians(35.0))
+        t1 = next(m for m in shallow.meshes if m.name == "tread1")
+        t5 = next(m for m in shallow.meshes if m.name == "tread5")
+        self.assertAlmostEqual(t5.vertices[:, 1].min() - t1.vertices[:, 1].min(), 4 * run)
+        self.assertEqual(len([m for m in shallow.meshes if m.name.startswith("debris")]), 3)
+
+    def test_maze_walls_fiducials_diagonals_rooms_and_tarp(self):
+        lane = self.lanes["maze"]
+        walls = self.named("maze", prefix="wall_")
+        self.assertEqual(len(walls), 36)
+        for wall in walls:
+            self.assertAlmostEqual(np.ptp(wall.vertices[:, 2]), 2.2)
+            self.assertAlmostEqual(min(np.ptp(wall.vertices[:, :2], axis=0)), 0.01)
+        fiducials = self.named("maze", prefix="fiducial_")
+        heights = sorted(round(float(m.vertices[:, 2].mean()), 2) for m in fiducials)
+        self.assertEqual(heights, [1.0] * 5 + [2.0] * 5)
+        self.assertEqual(len(self.named("maze", prefix="diagonal_", suffix="_0")), 19)
+        self.assertEqual(len(self.named("maze", prefix="room", suffix="_target")), 10)
+        tarp = next(m for m in lane.meshes if m.name == "tarp")
+        self.assertFalse(tarp.collision)
+        self.assertGreater(tarp.vertices[:, 2].min(), 2.2 - 1e-9)
+        # Everything but the tarp stands on the hall floor.
+        self.assertAlmostEqual(min(m.vertices[:, 2].min() for m in walls), 0.0)
 
 
 if __name__ == "__main__":

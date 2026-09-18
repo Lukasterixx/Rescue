@@ -1,1 +1,1 @@
-"""RoboCup Rescue 2026 competition lanes, isolated from the working rescue sim."""
+"""RoboCup Rescue 2026 competition lanes: the geometry and USD export the rescue sim builds its hall from."""

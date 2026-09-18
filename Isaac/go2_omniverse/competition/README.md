@@ -1,73 +1,60 @@
 # Competition lanes
 
-> **This is a copy** of `~/Rescue/competition`, taken on 2026-09-18 so the rescue sim could be built while the
-> original gains more arenas. The rescue sim (`../rescue_sim/`, launched with `../run_sim.sh`) uses its geometry,
-> build, textures and `GravelReset`; its lanes are the sim's levels. The launcher and `CompetitionRuntime` described
-> below are the original's adapter onto the old sim and are not used here. `../rescue_sim/README.md` says how the
-> two are to be merged.
+The terrain lanes and obstacles from `RoboCupRescue-Arena-Fabrication-Guide-2026C-Korea-1.pdf`:
+**Shifty Gravel**, **Diagonal K-Rails**, **Half-Cubic Stepfields**, **Pitch/Roll Ramps**,
+**Center in Alleys**, **Pallets & Pipes**, **Push/Pull Doors**, **Avoid Holes/Posts**,
+**Stair Debris | Pallet Climb** and the **Search & Map Maze**, plus the **K-Rail Square**: the
+2.4 m practice square from the course drawing, built from the same components, with the
+guide's Linear Align/Inspect tasks on its walls. All eleven exist together along one hall,
+so switching teleports the Go2 and D1 to the next lane without rebuilding the scene.
 
-The first two terrain lanes from `RoboCupRescue-Arena-Fabrication-Guide-2026C-Korea-1.pdf`,
-**Shifty Gravel** and **Diagonal K-Rails**, plus the **K-Rail Square**: the 2.4 m practice
-square from the course drawing, built from the same components, with the guide's Linear
-Align/Inspect tasks on its walls. All three exist together, 7 m apart, so switching
-teleports the Go2 and D1 to the next lane without rebuilding the scene.
-
-All new source, generated scenes and previews live here. The launcher imports the
-current `Isaac/go2_omniverse` simulator and installs an adapter in that process;
-it does not edit or copy those source files. Robot, arm, policy, sensors, ROS and
-normal driving controls continue to come from that simulator. Its normal
-`run_sim.sh` still launches its usual world.
+This package is the geometry and its USD export. The rescue sim (`../rescue_sim/`) builds the hall from it at
+startup, and each lane becomes one of its levels. The robot, arm, camera, policy, ROS and controls all belong to
+the sim. The package also holds the resets for the loose bodies (`runtime.py`).
 
 ## Run
 
-From the repository root, using the same Isaac Lab installation as the existing sim:
+From `Isaac/go2_omniverse`:
 
 ```bash
-./competition/run_sim.sh
+./run_sim.sh                                   # starts on Shifty Gravel
+./run_sim.sh --level stairs                    # any lane key, or cup for the cup demo
 ```
 
-Click the viewport to give it keyboard focus.
+The "Rescue sim" window, docked beside Stage, has a button for each lane. Page Down and Page Up step through them,
+and Home or R resets the current one. Loading a lane teleports the robot to its entry pad and resets the gravel and
+the avoid posts. `../rescue_sim/README.md` has the rest: the other controls, `/sim/level`, and what a load resets.
 
-| Key | Action |
-| --- | --- |
-| F1 | Teleport to Shifty Gravel |
-| F2 | Teleport to Diagonal K-Rails |
-| F3 | Teleport to K-Rail Square |
-| Page Down / Page Up | Next / previous lane, wrapping at the ends |
-| Home or R | Restore the current lane's start pose and reset the gravel |
-| Other keys | Existing simulator's driving, D1 and camera controls |
-
-Jumps restore the standing joints, zero root/joint velocities and motion commands,
-reset the arm through the existing D1 reset path, and request the existing ROS
-odometry reset. Policy action/history buffers are cleared and height observations
-are recomputed before the next inference. Both welded and teleported arm modes
-use the existing simulator's implementation. A jump does not clear an external
-SLAM system's accumulated map, and an external controller can send new commands
-after the jump.
+The geometry options are the sim's arguments:
 
 ```bash
-# Opposing 15-degree central floors, same two lanes
-./competition/run_sim.sh --difficulty slopes
+# Opposing 15-degree central floors
+./run_sim.sh --difficulty slopes
 
-# Start at K-Rails; raise the rails in 5 cm increments (the square's rails follow too)
-./competition/run_sim.sh --start-arena krails --k-rail-height 0.15
+# Raise the rails in 5 cm increments (the square's rails follow too)
+./run_sim.sh --level krails --k-rail-height 0.15
 
-# Start outside the practice square, on its south-west START|END pad
-./competition/run_sim.sh --start-arena square
+# Doorways 10 cm wider than the robot; door apparatus with the yellow steps removed;
+# a 35-degree stair with all three debris rails
+./run_sim.sh --level alleys --alley-width 0.41
+./run_sim.sh --level doors --door-floor square
+./run_sim.sh --level stairs --stair-angle 35 --stair-debris 3
 
 # Fixed aggregate geometry for lower physics cost
-./competition/run_sim.sh --gravel static
-
-# Exercise both jumps and a reset, then exit (requires the Isaac GPU runtime)
-./competition/run_sim.sh --headless --smoke-steps 60
+./run_sim.sh --gravel static
 ```
 
-`--gravel-seed` controls the deterministic stone variants/orientations. Defaults
-are flat floors, 10 cm K-Rails and dynamic gravel. Isaac options such as
-`--arm_mount teleport`, `--arm_mass`, and `--device` are forwarded. This first pass
-supports one Go2; conflicting robot, world or terrain arguments fail early.
-`ISAAC_SIM_CONDA_ENV` selects a different conda environment. `--help` works without
-starting Isaac.
+`--gravel-seed` controls the deterministic stone variants and orientations. The defaults are:
+- flat floors;
+- 10 cm K-Rails;
+- dynamic gravel;
+- 45 cm doorways and the full door floor;
+- a 45-degree stair without debris.
+
+The lane keys are gravel, krails, square, stepfields, ramps, alleys, pallets, doors, avoid, stairs and maze.
+
+The maze's tarp leaves its interior dark. Turn on the wrist light from the sim window to see in there with the
+wrist camera.
 
 ## Fabrication details
 
@@ -86,6 +73,15 @@ these differ from the PDF viewer's page index by one.
 | Rail height | 10 cm base rail, optional 5 cm lifts; 10 cm width | pp. 30–32 |
 | K-Rail Square | Two 2.4 × 1.2 m framed floors carrying the lane's four central K-Rail panels (one X); railings on the north and south edges, the north half of the east edge and the south half of the west edge; 33 cm milk crate on the crossing; START\|END floor pads outside the south-west and north-east corners | course drawing; pp. 31–32 |
 | Linear Align/Inspect | Green 90 cm 2x2 rail on the railing's middle horizontal (60 cm) with a 30 cm 2x4 trapezoid centre piece; five capped, hollow 5 cm × 5 cm pipes, two straight out at ±30 cm, one on each 45° face, one on top; a 5 cm acuity target at each cap (sets 1 and 2, viewer order left 90°, left 45°, centre, right 45°, right 90°) | pp. 69–72 |
+| Half-Cubic Stepfields | Standard lane; 32 cells of 59.4 cm thin-OSB bases, 16 quad-steps and 16 single-steps chequered; 29.7 cm thick-OSB plateaus on 2x4 legs at 15 cm (yellow) and 30 cm (orange) | pp. 33–35 |
+| Pitch/Roll Ramps | Standard lane; eight 1.2 m half-panel elements of four 59.4 cm ramps, 15 cm at the high edge, peaks and valleys alternating with clockwise up-slopes about the element centre | pp. 36–39 |
+| Center in Alleys | Two flat 1.2 × 2.4 m floors across the lane at the door end and two tilt-up 2.4 × 1.2 m floors side by side at the far end, which under `slopes` both rise 15° toward the far end; 12 perimeter railings; three dividers at x = −1.2, 0, +1.2 m, each a railing on one half of the width plus a 120 × 80 cm sliding OSB panel clamped to it, doorways of `--alley-width` alternating south, north, south | pp. 42–44 |
+| Pallets & Pipes | Standard lane; a fabricated 1.2 m grid pallet (OSB bottom, five 2x4 rails each way) on every cell, grid side up; two cells stacked to 20 cm; a 10 cm × 100 cm pipe in 60 cm sleeves on the lower surface against each raised face along the lane | pp. 45–49 |
+| Push/Pull Doors | 2.4 m square; framed 1.2 × 2.4 m wall with a 90 cm door on the red 1.2 m base at the back half of the centre line, thin 1.2 m panel to the front; orange 60 × 120 cm half steps and yellow 120 cm square steps, all 10 cm; slatted 45 cm side and back walls, open front; door leaf a 12 kg rigid body on a revolute hinge, 0–100°, sprung closed | pp. 56–59 |
+| Avoid Holes/Posts | Ten purchased 120 × 100 × 14 cm pallets (stringers, bottom boards, seven deck boards with gaps) in a meander of five runs; five pairs of loose 45 cm 2x4 posts 90 cm apart across the second pallet of each run | pp. 60–62 |
+| Stair Debris \| Pallet Climb | Entry floor with railings; 90 cm wide stair of five 20 cm rises (three 2x4 tops on two 2x4 bottoms per tread) between 1.0 m OSB walls with diagonal 2x4 rails, `--stair-angle` 35–45°, `--stair-debris` 0–3 rails; 2.4 × 1.2 m landing at 1.0 m on six legs with a west OSB panel; pallet climb of 7, 4 and 1 stacked grid pallets (70, 40, 10 cm) with three pipes at each 30 cm step and one on the floor; railings beside the climb | pp. 50–55 |
+| Search & Map Maze | The guide's example layout on a 9 × 5 grid of 1.22 m cells: 36 wall panels 10 mm × 2.2 m tall (L-walls flattened to segments), three entrances with their vestibule walls, ten 30 cm mapping fiducial tubes at 1 m and 2 m, 19 hallway diagonals of paired 2x4s on edge, two room crosses of 1.3 m 2x4s with an omni align/inspect task, a blackout tarp at 2.2 m | pp. 63–67 |
+| OMNI Align/Inspect | 30 cm OSB base, two 30 cm 2x4 trapezoids crossed on edge, five capped pipes: one up, one on each 45° end face; acuity sets 1 and 2 | p. 71 |
 
 The guide mixes imperial stock sizes and nominal metric sizes and explicitly
 permits small variations. These models use the metric dimensions. K-Rail diagonal
@@ -119,44 +115,58 @@ walkable floors, K-Rails and the **nominal initial gravel surface**, excluding
 tall railings. Isaac Lab's static raycaster cannot follow the individual moving
 stones. Camera/lidar rendering and foot contacts use the actual scene geometry.
 
-This pass includes the flat/preliminary and opposing-slope layouts. The optional
-finals pinch-point panels are not yet included, and of the dexterity fixtures only the
-square's two Linear Align/Inspect tasks are.
+The eight later lanes are approximations of the guide's drawings where it leaves the
+arrangement free. The stepfield plateau pattern and the ramp peak/valley chequer are ours;
+the guide only fixes the element sizes and says contacts must span three elevations. The
+ramps' rotating slip disks, the omni tasks the renders show at the centre of the stepfield
+and ramp lanes, and the pinch-point panels are not modelled. Pallets & Pipes uses the
+prelims layout with the grid side up; its pipes and the stair lane's pipes are static
+cylinders, not free-spinning ones. The door's weighted closer is an angular drive (2 N·m/rad,
+2 N·m·s/rad) rather than a hanging weight, and its handles are part of the leaf's hull. The
+avoid lane is single level; the guide's optional stacked pallets are not included, and its
+posts are 1.2 kg rigid bodies that fall when hit and come back on reset. The stair landing
+keeps only its west OSB panel so the pallet side and the drive-under passage stay open, and
+the belay arches are omitted as before. The maze is the guide's example map read off the
+drawing at 1.22 m per cell, with 19 of the 20 diagonals it cuts; its tarp is a black
+non-colliding sheet over the walls, so the interior is dark and the robot's light matters.
+Doors, avoid and maze lanes have no framed floor: their pads are 1.5 cm mats on the hall.
+
+This pass includes the flat/preliminary and opposing-slope layouts of the standard lanes.
+Of the dexterity fixtures, the square's two Linear Align/Inspect tasks and the maze rooms'
+two omni tasks are included.
 
 ## Files and checks
 
-- `geometry.py`: dimensions, lane catalogue, mesh construction and start poses;
-  adding another lane here extends the next/previous selection list.
-- `build.py`, `textures.py`: standalone USD export, materials, scanner geometry,
-  scene manifest and a plan/3D preview.
-- `runtime.py`: configuration adapter, queued hotkeys, state reset, gravel reset,
-  status window and bounded smoke run.
-- `main.py`, `run_sim.sh`: separate entry point and Isaac environment setup.
-- `tests/`: geometry, real USD-reference composition, and CPU-tensor control tests.
+- `geometry.py`: dimensions, lane catalogue (`LANE_ORIGINS`), shared builders (floors,
+  railings, K-rails, pallets, pipes, inspect tasks) and start poses. Adding a lane to the
+  catalogue adds a level to the sim.
+- `terrains.py`: stepfields, ramps, alleys and pallets on the standard lane.
+- `structures.py`: doors, avoid and stairs.
+- `maze.py`: the maze layout and fixtures.
+- `build.py`, `textures.py`: USD export, materials, scanner geometry, the scene
+  manifest, a plan/3D preview, and the geometry arguments the sim takes.
+- `runtime.py`: resets for the loose bodies (gravel and avoid posts).
+- `tests/`: geometry, real USD-reference composition, and the loose-body binding.
 
 Export without launching the simulator, using a Python environment with `numpy`,
 `scipy`, `usd-core` and `Pillow` (plus `matplotlib` for `--preview`):
 
 ```bash
-python3 -m competition.build --output competition/generated/competition.usda --preview
+python3 -m competition.build --output competition/generated/competition.usda --preview   # from Isaac/go2_omniverse
 python3 -m unittest discover -s competition/tests -v
 ```
 
-The USD test skips when USD bindings are unavailable; the runtime control tests
-skip when PyTorch is unavailable. Run the latter with your Isaac environment's
-Python to use real CPU tensors. Geometry and export tests do not need a GPU.
+The USD test skips when USD bindings are unavailable. Geometry and export tests do not need a GPU.
 Generated USD files, JSON manifests, textures and previews are ignored by Git.
 
 The implementation was checked with geometry/topology tests, both static and
-dynamic USD exports composed under the real terrain namespace, CPU-tensor reset
-tests, and visual inspection of the generated preview. The dynamic-gravel launcher
-has also passed 60-step GPU smoke runs in headless and windowed modes on the
-RTX 4080, exercising both arena jumps and resets.
+dynamic USD exports composed under the real terrain namespace, and visual inspection
+of the generated preview. In the rescue sim, `./run_sim.sh --headless --smoke-steps N`
+loads every lane in turn.
 
-The launch-crash fix disables `RigidPrim`'s default contact-sensor preparation
-when binding the gravel reset view. Adding physics schemas and sleep attributes
+Binding a reset view disables `RigidPrim`'s default contact-sensor preparation. Adding physics schemas and sleep attributes
 to all 7,816 already-running stones invalidated their GPU body indices, producing
 `Unresolved rigid dynamic index` followed by a CUDA illegal-memory-access crash.
 The reset view now binds without reauthoring the stones' physics settings.
-The smoke runs verify startup and resets; gravel calibration and course traversal
+Smoke runs verify startup and resets. Gravel calibration and course traversal
 still need evaluation.

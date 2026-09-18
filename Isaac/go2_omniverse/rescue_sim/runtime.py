@@ -1,10 +1,13 @@
 """Loading levels at runtime, standing the robot down and up, and the window and keys that ask for both.
 
 UI buttons and keys only queue a request; `LevelManager.update()`, called by the sim loop between policy steps, is
-the only thing that writes robot, arm, cup or gravel state. Loading a level teleports the robot to its start with
-velocities zeroed, puts the legs in the level's posture and the arm back at its folded rest (the firmware parks
-there, so it does not lunge back to an old target), resets the gravel, re-zeroes odometry, and clears the policy's
-action history so its next input is fresh. A controller outside the sim (nav2, the behaviour tree) is not reset: it
+the only thing that writes robot, arm, cup or loose-body state. Loading a level teleports the robot to its start
+with velocities zeroed, puts the legs in the level's posture and the arm back at its folded rest (the firmware parks
+there, so it does not lunge back to an old target), puts the gravel and the avoid posts back, re-zeroes odometry,
+and clears the policy's action history so its next input is fresh.
+
+There are no per-level hotkeys: Isaac Sim already binds F2 (rename), F7 (hide the UI), F10 (screenshot) and F11
+(full screen), so the level window's buttons and Page Up/Down pick levels. A controller outside the sim (nav2, the behaviour tree) is not reset: it
 can send new commands straight after.
 """
 from __future__ import annotations
@@ -19,14 +22,15 @@ from . import levels as lv
 
 
 class LevelManager:
-    def __init__(self, env, levels, d1, ros, start: int = 0, gravel=None, seed: int = 0, headless: bool = False,
-                 on_status=None):
+    def __init__(self, env, levels, d1, ros, start: int = 0, loose=(), light=None, seed: int = 0,
+                 headless: bool = False, on_status=None):
         self.core = env.unwrapped
         self.env = env
         self.levels = levels
         self.d1 = d1
         self.ros = ros
-        self.gravel = gravel
+        self.loose = list(loose)          # competition.runtime.loose_resets: gravel, avoid posts
+        self.light = light                # the wrist light, or None
         self.headless = headless
         self.selection = lv.Selection(len(levels), start)
         self.selection.pending = start          # the first update() loads the start level
@@ -37,6 +41,7 @@ class LevelManager:
         self._lock = threading.Lock()
         self._new_cup = False
         self._toggle_posture = False
+        self._light_request = None
         self._cup_rng = np.random.default_rng(seed + 1)
         self.needs_observation = False
         self.loads = 0
@@ -78,8 +83,13 @@ class LevelManager:
         with self._lock:
             self._toggle_posture = True
 
+    def request_light(self, on: bool | None = None) -> None:
+        """Turn the wrist light on or off; None toggles it."""
+        with self._lock:
+            self._light_request = (not self.light.on if on is None else on) if self.light is not None else None
+
     def request(self, word: str) -> None:
-        """What `/sim/level` asks for: a level's key, reset, new_cup, lie or stand."""
+        """What `/sim/level` asks for: a level's key, reset, new_cup, lie, stand, light_on or light_off."""
         keys = [level.key for level in self.levels]
         if word in keys:
             self.request_level(keys.index(word))
@@ -90,9 +100,11 @@ class LevelManager:
         elif word in ("lie", "stand"):
             if (word == "lie") == (self.posture.posture == lv.STANDING):
                 self.request_posture_toggle()
+        elif word in ("light_on", "light_off"):
+            self.request_light(word == "light_on")
         else:
-            print(f"[levels] /sim/level: '{word}' is not one of {keys + ['reset', 'new_cup', 'lie', 'stand']}",
-                  flush=True)
+            words = keys + ["reset", "new_cup", "lie", "stand", "light_on", "light_off"]
+            print(f"[levels] /sim/level: '{word}' is not one of {words}", flush=True)
 
     @property
     def level(self) -> lv.Level:
@@ -105,6 +117,11 @@ class LevelManager:
             index = self.selection.consume()
             new_cup, self._new_cup = self._new_cup, False
             toggle, self._toggle_posture = self._toggle_posture, False
+            light, self._light_request = self._light_request, None
+        if light is not None and self.light is not None and light != self.light.on:
+            self.light.set(light)
+            self.say(f"wrist light {'on' if light else 'off'}")
+            self._refresh_ui()
         if load:
             self._load(self.levels[index])
         elif new_cup and self.level.key == lv.CUP_DEMO.key:
@@ -139,8 +156,8 @@ class LevelManager:
         self.d1.hold_rest()
         if level.key == lv.CUP_DEMO.key:
             self._place_cup(lv.CUP_XY_B, lv.CUP_YAW_DEG)
-        if self.gravel is not None:
-            self.gravel.reset()
+        for loose in self.loose:
+            loose.reset()
         from . import env_cfg
 
         for key in env_cfg.base_command:
@@ -217,24 +234,34 @@ class LevelManager:
             return
         import omni.ui as ui
 
+        rows = math.ceil(len(self.levels) / 2)
         # Docked beside the Stage panel, and shown, so it covers none of the viewport.
-        self.window = ui.Window("Rescue sim", width=330, height=190 + 33 * len(self.levels),
-                                flags=ui.WINDOW_FLAGS_NO_SCROLLBAR)
+        self.window = ui.Window("Rescue sim", width=380, height=225 + 31 * rows, flags=ui.WINDOW_FLAGS_NO_SCROLLBAR)
         self.window.deferred_dock_in("Stage", ui.DockPolicy.CURRENT_WINDOW_IS_ACTIVE)
         with self.window.frame:
             with ui.VStack(spacing=5, height=0):
                 self._status = ui.Label("", word_wrap=True, height=36)
                 ui.Label("Levels", height=18)
                 self._buttons = []
-                for i, level in enumerate(self.levels):
-                    self._buttons.append(ui.Button("", height=28, clicked_fn=lambda i=i: self.request_level(i),
-                                                   tooltip=level.subtitle))
+                for row in range(rows):
+                    with ui.HStack(spacing=5, height=26):
+                        for i in range(2 * row, min(2 * row + 2, len(self.levels))):
+                            self._buttons.append(ui.Button("", clicked_fn=lambda i=i: self.request_level(i),
+                                                           tooltip=self.levels[i].subtitle))
+                        if 2 * row + 1 >= len(self.levels):
+                            ui.Spacer()
                 with ui.HStack(spacing=5, height=28):
                     ui.Button("Reset level", clicked_fn=self.request_reset, tooltip="Home or R")
                     self._posture_button = ui.Button("", clicked_fn=self.request_posture_toggle, tooltip="L")
-                self._cup_button = ui.Button("New cup position", height=28, clicked_fn=self.request_new_cup,
-                                             tooltip="Somewhere else in front of the lying robot (cup demo only)")
-                ui.Label("Drive: W A S D Q E    Lidar points: T    Click the viewport first", height=18,
+                with ui.HStack(spacing=5, height=28):
+                    self._cup_button = ui.Button("New cup position", clicked_fn=self.request_new_cup,
+                                                 tooltip="Somewhere else in front of the lying robot (cup demo only)")
+                    self._light_button = ui.Button("", clicked_fn=self.request_light,
+                                                   tooltip="A lamp beside the wrist camera, for the maze under its "
+                                                           "tarp")
+                ui.Label("Levels: Page Up / Page Down    Drive: W A S D Q E", height=18,
+                         style={"color": 0xFF909090})
+                ui.Label("Lidar points: T    Click the viewport before using keys", height=18,
                          style={"color": 0xFF909090})
         self._refresh_ui()
 
@@ -242,11 +269,11 @@ class LevelManager:
         if not self._buttons:
             return
         for i, (button, level) in enumerate(zip(self._buttons, self.levels)):
-            marker = "> " if i == self.selection.current else "   "
-            key = f"F{i + 1}" if i < 12 else ""
-            button.text = f"{marker}{key}  {level.title}"
+            button.text = f"> {level.title}" if i == self.selection.current else level.title
         self._posture_button.text = "Stand up" if self.posture.posture == lv.LYING else "Lie down"
         self._cup_button.enabled = self.level.key == lv.CUP_DEMO.key
+        self._light_button.enabled = self.light is not None
+        self._light_button.text = "Wrist light: " + ("on" if self.light is not None and self.light.on else "off")
 
     # ------------------------------------------------------------------------------------------ keys
     def on_key(self, name: str, pressed: bool, carb_input, base_command) -> bool:
@@ -255,10 +282,7 @@ class LevelManager:
             if name in ("W", "S", "A", "D", "Q", "E"):
                 base_command["0"] = [0.0, 0.0, 0.0]
             return name in ("W", "S", "A", "D", "Q", "E")
-        f_keys = {f"F{i + 1}": i for i in range(min(12, len(self.levels)))}
-        if name in f_keys:
-            self.request_level(f_keys[name])
-        elif name in ("PAGE_UP", "PAGE_DOWN"):
+        if name in ("PAGE_UP", "PAGE_DOWN"):
             self.request_cycle(-1 if name == "PAGE_UP" else 1)
         elif name in ("HOME", "R"):
             self.request_reset()

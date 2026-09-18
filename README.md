@@ -240,11 +240,11 @@ One sim: the Go2 with its D1 arm and wrist RealSense, in the RoboCup Rescue comp
 
 ```bash
 cd ~/Rescue/Isaac/go2_omniverse
-./run_sim.sh                  # windowed; load levels from the "Rescue sim" window or F1-F4
+./run_sim.sh                  # windowed; load levels from the "Rescue sim" window
 ./run_sim.sh --level cup      # start in the cup demo
 ```
 
-- **Levels:** Shifty Gravel, Diagonal K-Rails, the K-Rail Square and the cup demo. Load them at runtime from the window, with F1–F4, or with `/sim/level`.
+- **Levels:** the competition's eleven lanes, from Shifty Gravel to the Search & Map Maze, and the cup demo. Load them at runtime from the window, with Page Up/Down, or with `/sim/level`.
 - **The arm is not driven by the sim.** It rests folded until the behaviour tree moves it through `maps/arm_bridge.py --sim`, exactly as on the robot. The sim's D1 is D1Training's model of the real arm: its drives, its firmware planner, its 10 Hz commands and 9 Hz feedback, and its servo signs and gripper units on the wire.
 - **The wrist RealSense** is D1Training's: the bench D435i's calibration, the saved wrist mount, and depth with range limits and stereo noise. It is published on the realsense container's `/camera/...` topics.
 - **The viewport is yours.** To follow the robot, set Follow Mode to "Asset Root" in the IsaacLab tab.

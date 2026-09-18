@@ -1,8 +1,9 @@
 """Measured lane geometry. Metres, Z up; no Isaac/Omniverse imports.
 
 Source: RoboCupRescue-Arena-Fabrication-Guide-2026C-Korea-1.pdf.
-Printed pp. 6, 21–25, 27–28, 30–32 and 69–72 (PDF index diverges after p. 20).
-Nominal metric lumber dimensions are intentional, as permitted by the guide.
+Printed pp. 6, 21–25, 27–28, 30–32 and 69–72 here; the other lanes' modules cite
+their own pages (PDF index diverges after p. 20). Nominal metric lumber
+dimensions are intentional, as permitted by the guide.
 """
 
 from __future__ import annotations
@@ -27,6 +28,12 @@ COLORS = {
     "green": (0.03, 0.55, 0.25),
     "metal": (0.30, 0.32, 0.34),
     "pvc": (0.92, 0.92, 0.90),
+    "yellow": (0.93, 0.80, 0.12),   # stepfield 15 cm plateaus, door square steps
+    "orange": (0.90, 0.45, 0.10),   # stepfield 30 cm plateaus, door half steps
+    "red": (0.75, 0.12, 0.10),      # door base, debris rail
+    "door": (0.42, 0.42, 0.45),     # the purchased door leaf
+    "tarp": (0.03, 0.03, 0.03),     # blackout tarp over the maze
+    "post": (0.08, 0.08, 0.08),     # avoid-lane posts, black in the guide's render
 }
 # Visual/colour acuity targets, printed p. 72: ring colour and the gap directions of the
 # three nested Landolt Cs (degrees, counter-clockwise from the viewer's right). Set 1 is the
@@ -53,6 +60,10 @@ class Options:
     k_rail_height: float = 0.10
     gravel: str = "dynamic"
     seed: int = 2026
+    alley_width: float = 0.45     # Center in Alleys doorway: robot width + 10 cm, p. 43
+    door_floor: str = "flat"      # Doors: flat | square (yellow steps out) | half (orange out too), p. 57
+    stair_angle: float = 45.0     # Stairs: 35–45 degrees, p. 52
+    stair_debris: int = 0         # Stairs: 0–3 hinged debris rails, p. 51
 
     def __post_init__(self):
         if self.difficulty not in ("flat", "slopes"):
@@ -63,6 +74,14 @@ class Options:
             self.k_rail_height / 0.05, round(self.k_rail_height / 0.05), abs_tol=1e-7
         ):
             raise ValueError("K-Rails must be 0.10–0.40 m tall, in 0.05 m increments")
+        if not 0.3 <= self.alley_width <= 1.2:
+            raise ValueError("alley_width must be 0.3–1.2 m")
+        if self.door_floor not in ("flat", "square", "half"):
+            raise ValueError("door_floor must be flat, square or half")
+        if not 35.0 <= self.stair_angle <= 45.0:
+            raise ValueError("stair_angle must be 35–45 degrees")
+        if self.stair_debris not in (0, 1, 2, 3):
+            raise ValueError("stair_debris must be 0–3")
 
 
 @dataclass
@@ -74,6 +93,21 @@ class Mesh:
     collision: bool = True
     scan: bool = False
     uv: np.ndarray | None = None  # per-vertex texture coordinates; None = planar projection
+    dynamic: bool = False  # its own rigid body: exported about its centroid with a translate op
+    mass: float = 0.0
+
+
+@dataclass(frozen=True)
+class Joint:
+    """A revolute joint between two of a lane's meshes, authored into the USD."""
+
+    name: str
+    body0: str  # a static mesh, or "" for the world
+    body1: str  # a dynamic mesh
+    pivot: tuple[float, float, float]  # world point on the vertical hinge axis
+    limits: tuple[float, float] = (0.0, 90.0)  # degrees
+    stiffness: float = 0.0  # angular drive back to 0 degrees, N m / rad
+    damping: float = 0.0  # N m s / rad
 
 
 @dataclass(frozen=True)
@@ -114,6 +148,15 @@ class Lane:
     # USD wxyz. The 4.8 m lanes start facing -y, into their entry gate.
     spawn_rotation: tuple[float, float, float, float] = (math.sqrt(0.5), 0.0, 0.0, -math.sqrt(0.5))
     subtitle: str = "4.8 m × 2.4 m nominal lane · 5 cm end-zone offsets"
+    joints: list[Joint] = field(default_factory=list)
+
+    def dynamic_meshes(self):
+        return [m for m in self.meshes if m.dynamic]
+
+
+def yaw_quaternion(yaw):
+    """USD wxyz for a rotation about z."""
+    return (math.cos(yaw / 2), 0.0, 0.0, math.sin(yaw / 2))
 
 
 def prism(name, polygon, bottom, top, material="wood", collision=True, scan=False):
@@ -182,8 +225,8 @@ def add(lane, mesh, floor=None):
     lane.meshes.append(mesh)
 
 
-def railing(lane, floor, start, end, name):
-    """1.2 m frame: two 10 cm posts and three 10 cm horizontal members.
+def railing(lane, floor, start, end, name, z=0.0):
+    """1.2 m frame: two 10 cm posts and three 10 cm horizontal members, standing at `z`.
 
     The horizontals' tops are at 30, 60 and 90 cm ("spacing between tops 30 cm", p. 22),
     which is also what puts the inspect tasks' rails at their 60 cm elevation (p. 69).
@@ -194,14 +237,14 @@ def railing(lane, floor, start, end, name):
     direction /= length
     side = np.array([-direction[1], direction[0]])
     middle = (a + b) / 2
-    for suffix, x, z, sx, sz in (
+    for suffix, x, zc, sx, sz in (
         ("post_a", -length / 2 + 0.05, 0.45, 0.10, 0.90),
         ("post_b", length / 2 - 0.05, 0.45, 0.10, 0.90),
         ("lower", 0, 0.25, length - 0.20, 0.10),
         ("middle", 0, 0.55, length - 0.20, 0.10),
         ("upper", 0, 0.85, length - 0.20, 0.10),
     ):
-        mesh = box(f"{name}_{suffix}", (x, 0, z), (sx, 0.05, sz))
+        mesh = box(f"{name}_{suffix}", (x, 0, z + zc), (sx, 0.05, sz))
         xy = mesh.vertices[:, :2].copy()
         mesh.vertices[:, :2] = middle + xy[:, :1] * direction + xy[:, 1:2] * side
         add(lane, mesh, floor)
@@ -514,6 +557,188 @@ def tube(name, start, axis, length, outer, inner, material, sides=16):
     return orient(mesh, start, axis)
 
 
+def orient3(mesh, start, axis):
+    """Map a mesh built along +z onto any unit 3D `axis`, its base at `start`."""
+    forward = np.asarray(axis, dtype=float)
+    forward /= np.linalg.norm(forward)
+    reference = np.array([0.0, 0.0, 1.0]) if abs(forward[2]) < 0.99 else np.array([1.0, 0.0, 0.0])
+    right = np.cross(reference, forward)
+    right /= np.linalg.norm(right)
+    up = np.cross(forward, right)
+    v = mesh.vertices
+    mesh.vertices = (
+        np.asarray(start, dtype=float) + v[:, :1] * right + v[:, 1:2] * up + v[:, 2:3] * forward
+    )
+    return mesh
+
+
+def vertical_prism(name, polygon_uz, u_axis, width, origin, material="wood", collision=True, scan=False):
+    """A prism whose polygon stands in a vertical plane: `polygon_uz` is (along u, up), extruded
+    `width` across it, centred on `origin`. Used for pieces cut to a trapezoid on edge."""
+    mesh = prism(name, polygon_uz, 0.0, width, material, collision, scan)
+    ux, uy = u_axis
+    across = np.array([uy, -ux, 0.0])  # u x up, so the extrusion keeps the winding outward
+    return orient3(mesh, np.asarray(origin, dtype=float) - across * width / 2, across)
+
+
+def wedge(name, bounds, rise, bottom, height, material="osb", scan=True):
+    """A ramp over `bounds` = (x0, y0, x1, y1): flat underside at `bottom`, top climbing from an
+    OSB-thin low edge to `height` at the high edge; `rise` is the direction the top climbs, one
+    of "+x", "-x", "+y", "-y"."""
+    x0, y0, x1, y1 = bounds
+
+    def top(x, y):
+        t = {
+            "+x": (x - x0) / (x1 - x0),
+            "-x": (x1 - x) / (x1 - x0),
+            "+y": (y - y0) / (y1 - y0),
+            "-y": (y1 - y) / (y1 - y0),
+        }[rise]
+        return bottom + OSB + (height - OSB) * t
+
+    corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+    vertices = np.array(
+        [(x, y, bottom) for x, y in corners] + [(x, y, top(x, y)) for x, y in corners]
+    )
+    faces = [(0, 2, 1), (0, 3, 2), (4, 5, 6), (4, 6, 7)]
+    for i in range(4):
+        j = (i + 1) % 4
+        faces += [(i, j, 4 + j), (i, 4 + j, 4 + i)]
+    return Mesh(name, vertices, np.array(faces, dtype=np.int32), material, True, scan)
+
+
+PALLET_TOP = OSB + 0.09  # a fabricated grid pallet: thin OSB bottom under 2x4 rails, p. 47
+
+
+def grid_pallet(lane, floor, name, center, z):
+    """1.2 m fabricated grid pallet (p. 47): OSB bottom with five 2x4 rails each way on edge,
+    grid side up, so feet can drop into the 9 cm deep openings. Returns the top height."""
+    x, y = center
+    add(lane, box(f"{name}_osb", (x, y, z + OSB / 2), (1.2, 1.2, OSB), "osb", scan=True), floor)
+    for i, p in enumerate((-0.575, -0.2875, 0.0, 0.2875, 0.575)):
+        add(lane, box(f"{name}_rx{i}", (x, y + p, z + OSB + 0.045), (1.2, 0.05, 0.09), scan=True), floor)
+        add(lane, box(f"{name}_ry{i}", (x + p, y, z + OSB + 0.045), (0.05, 1.2, 0.09), scan=True), floor)
+    return z + PALLET_TOP
+
+
+PURCHASED_PALLET = (1.2, 1.0, 0.14)  # 100 x 120 x 10-15 cm, p. 62
+
+
+def purchased_pallet(lane, name, center, z, along="x"):
+    """A bought 120 x 100 cm pallet, its long side along `along`: three stringers, three
+    bottom boards, seven deck boards with gaps. Returns the deck height."""
+    x, y = center
+
+    def part(suffix, du, dv, su, sv, zc, sz, scan=False):
+        centre = (x + du, y + dv, z + zc) if along == "x" else (x + dv, y + du, z + zc)
+        size = (su, sv, sz) if along == "x" else (sv, su, sz)
+        add(lane, box(f"{name}_{suffix}", centre, size, scan=scan))
+
+    for i, v in enumerate((-0.45, 0.0, 0.45)):
+        part(f"stringer{i}", 0.0, v, 1.2, 0.08, 0.07, 0.10)
+    for i, u in enumerate((-0.55, 0.0, 0.55)):
+        part(f"bottom{i}", u, 0.0, 0.10, 1.0, 0.01, 0.02)
+    for i, u in enumerate(np.linspace(-0.55, 0.55, 7)):
+        part(f"deck{i}", u, 0.0, 0.10, 1.0, 0.13, 0.02, scan=True)
+    return z + 0.14
+
+
+PIPE_RADIUS = 0.05  # 10 cm OD PVC, 100 cm long, p. 47
+
+
+def pipe_run(lane, floor, name, start, axis, length, z, count=1, sleeves=True):
+    """`count` pipes stacked in vertical sleeves along an edge, the lowest resting at `z`.
+    Sleeves are the 60 cm OSB boxes that let the pipes spin (p. 47)."""
+    ax, ay = axis
+    for k in range(count):
+        add(
+            lane,
+            cylinder(
+                f"{name}_pipe{k}",
+                (start[0], start[1], z + PIPE_RADIUS + 2 * PIPE_RADIUS * k),
+                axis,
+                length,
+                PIPE_RADIUS,
+                "pvc",
+            ),
+            floor,
+        )
+    if sleeves:
+        for k, t in enumerate((-0.07, length + 0.07)):
+            add(
+                lane,
+                box(
+                    f"{name}_sleeve{k}",
+                    (start[0] + ax * t, start[1] + ay * t, z + 0.30),
+                    (0.13, 0.13, 0.60),
+                    "osb",
+                ),
+                floor,
+            )
+
+
+def acuity_pipe(place, name, foot, axis, target):
+    """A capped 5 cm pipe with its acuity target, pointing along a 3D `axis` from `foot`.
+    `place` receives each part; used by both the linear and the omni tasks."""
+    axis = np.asarray(axis, dtype=float)
+    axis /= np.linalg.norm(axis)
+    cap_end = np.asarray(foot, dtype=float) + CAP_THICKNESS * axis
+    for part in (
+        orient3(prism(f"{name}_cap", ring(CAP_RADIUS), 0.0, CAP_THICKNESS, "pvc"), foot, axis),
+        orient3(_tube_mesh(f"{name}_tube", PIPE_LENGTH, PIPE_OUTER, PIPE_INNER, "pvc"), cap_end, axis),
+        orient3(_target_mesh(f"{name}_target", f"target_{target}"), cap_end, axis),
+    ):
+        place(part)
+
+
+def _tube_mesh(name, length, outer, inner, material, sides=16):
+    o, i = ring(outer, sides), ring(inner, sides)
+    n = sides
+    vertices = np.concatenate(
+        (
+            np.column_stack((o, np.zeros(n))),
+            np.column_stack((o, np.full(n, length))),
+            np.column_stack((i, np.zeros(n))),
+            np.column_stack((i, np.full(n, length))),
+        )
+    )
+    faces = []
+    for k in range(n):
+        j = (k + 1) % n
+        ob, ot, ib, it = k, n + k, 2 * n + k, 3 * n + k
+        jb, jt, jib, jit = j, n + j, 2 * n + j, 3 * n + j
+        faces += [(ob, jb, jt), (ob, jt, ot)]
+        faces += [(ib, jit, jib), (ib, it, jit)]
+        faces += [(ob, ib, jib), (ob, jib, jb)]
+        faces += [(ot, jt, jit), (ot, jit, it)]
+    return Mesh(name, vertices, np.array(faces, dtype=np.int32), material)
+
+
+def _target_mesh(name, material):
+    mesh = prism(name, ring(TARGET_RADIUS), 0.0, 0.002, material)
+    mesh.uv = mesh.vertices[:, :2] / (2 * TARGET_RADIUS) + 0.5
+    return mesh
+
+
+def omni_inspect_task(lane, name, center, z, targets):
+    """OMNI Align/Inspect task, p. 71, on the floor: a 30 cm OSB base with two notched 30 cm
+    2x4 centre pieces crossed on edge, each cut to a trapezoid, carrying five capped pipes:
+    one straight up from the crossing and one on each 45-degree end face. `targets` are five
+    ACUITY_TARGETS keys: top, then the +x, +y, -x, -y arms."""
+    x, y = center
+    add(lane, box(f"{name}_base", (x, y, z + OSB / 2), (0.30, 0.30, OSB), "osb"))
+    z0 = z + OSB
+    polygon = [(-0.15, 0.0), (0.15, 0.0), (0.05, 0.10), (-0.05, 0.10)]
+    for k, u in enumerate(((1.0, 0.0), (0.0, 1.0))):
+        add(lane, vertical_prism(f"{name}_arm{k}", polygon, u, 0.05, (x, y, z0), "green"))
+    s = math.sqrt(0.5)
+    pipes = [((x, y, z0 + 0.10), (0.0, 0.0, 1.0))]
+    for ux, uy in ((1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0)):
+        pipes.append(((x + 0.10 * ux, y + 0.10 * uy, z0 + 0.05), (s * ux, s * uy, s)))
+    for k, ((foot, axis), target) in enumerate(zip(pipes, targets)):
+        acuity_pipe(lambda mesh: add(lane, mesh), f"{name}_pipe{k}", foot, axis, target)
+
+
 def linear_inspect_task(lane, floor, center, facing, name, targets):
     """Linear Align/Inspect task, p. 70, on a railing's middle horizontal.
 
@@ -618,54 +843,73 @@ def square_lane(options, origin):
     return lane
 
 
-def build_lanes(options=Options()):
-    lanes = []
-    for i, (key, title) in enumerate(
-        (("gravel", "Shifty Gravel"), ("krails", "Diagonal K-Rails"))
-    ):
-        angle = math.radians(15) if options.difficulty == "slopes" else 0.0
-        floors = [
-            Floor("blue_end", (-1.8, 0.05), (1.2, 2.4)),
-            Floor("lower", (0.0, -0.6), (2.4, 1.2), angle),
-            Floor("upper", (0.0, 0.6), (2.4, 1.2), -angle),
-            Floor("green_end", (1.8, -0.05), (1.2, 2.4)),
-        ]
-        origin = (i * LANE_SPACING, 0.0, 0.0)
-        surface = DECK + (GRAVEL_DEPTH if key == "gravel" else OSB)
-        # Simulation entry pad, outside the guide's footprint and open gate.
-        spawn = (origin[0] - 1.8, 1.85, surface + 0.42)
-        lane = Lane(key, title, origin, floors, spawn)
-        build_structure(lane)
-        if key == "gravel":
-            gravel_lane(lane, options)
-        else:
-            k_rail_lane(lane, options)
+def standard_lane(key, title, origin, options, surface_extra, terrain):
+    """The guide's 4.8 x 2.4 m lane (p. 6): two end floors, two centre floors that tilt under
+    `slopes`, 14 railings, then `terrain(lane, options)` on top, and the simulation's entry
+    pad level with the lane's walking surface (DECK + `surface_extra`)."""
+    angle = math.radians(15) if options.difficulty == "slopes" else 0.0
+    floors = [
+        Floor("blue_end", (-1.8, 0.05), (1.2, 2.4)),
+        Floor("lower", (0.0, -0.6), (2.4, 1.2), angle),
+        Floor("upper", (0.0, 0.6), (2.4, 1.2), -angle),
+        Floor("green_end", (1.8, -0.05), (1.2, 2.4)),
+    ]
+    surface = DECK + surface_extra
+    # Simulation entry pad, outside the guide's footprint and open gate.
+    spawn = (origin[0] - 1.8, 1.85, surface + 0.42)
+    lane = Lane(key, title, origin, floors, spawn)
+    build_structure(lane)
+    terrain(lane, options)
+    add(
+        lane,
+        box("entry_pad", (-1.8, 1.85, surface / 2), (1.2, 1.2, surface), "blue", scan=True),
+    )
+    # Colour-coded start/finish strips, kept off the traversable obstacles.
+    for floor, material in ((floors[0], "blue"), (floors[-1], "green")):
         add(
             lane,
-            box(
-                "entry_pad",
-                (-1.8, 1.85, surface / 2),
-                (1.2, 1.2, surface),
-                "blue",
-                scan=True,
-            ),
+            box(f"{floor.name}_marker", (0, -1.17, 0.91), (1.0, 0.015, 0.025), material, False),
+            floor,
         )
-        # Colour-coded start/finish strips, kept off the traversable obstacles.
-        for floor, material in ((floors[0], "blue"), (floors[-1], "green")):
-            add(
-                lane,
-                box(
-                    f"{floor.name}_marker",
-                    (0, -1.17, 0.91),
-                    (1.0, 0.015, 0.025),
-                    material,
-                    False,
-                ),
-                floor,
-            )
-        lanes.append(lane)
-    lanes.append(square_lane(options, (2 * LANE_SPACING, 0.0, 0.0)))
-    return lanes
+    return lane
+
+
+# Lane catalogue: key, title, origin x. Standard lanes sit 7 m apart; the stairs and the
+# maze are longer and get more room. Adding a lane here extends F-key/PageDown selection.
+LANE_ORIGINS = {
+    "gravel": 0.0,
+    "krails": 1 * LANE_SPACING,
+    "square": 2 * LANE_SPACING,
+    "stepfields": 3 * LANE_SPACING,
+    "ramps": 4 * LANE_SPACING,
+    "alleys": 5 * LANE_SPACING,
+    "pallets": 6 * LANE_SPACING,
+    "doors": 7 * LANE_SPACING,
+    "avoid": 8 * LANE_SPACING,
+    "stairs": 9 * LANE_SPACING + 2.0,
+    "maze": 9 * LANE_SPACING + 17.0,
+}
+
+
+def build_lanes(options=Options()):
+    from . import maze, structures, terrains
+
+    def origin(key):
+        return (LANE_ORIGINS[key], 0.0, 0.0)
+
+    return [
+        standard_lane("gravel", "Shifty Gravel", origin("gravel"), options, GRAVEL_DEPTH, gravel_lane),
+        standard_lane("krails", "Diagonal K-Rails", origin("krails"), options, OSB, k_rail_lane),
+        square_lane(options, origin("square")),
+        standard_lane("stepfields", "Half-Cubic Stepfields", origin("stepfields"), options, OSB, terrains.stepfield_lane),
+        standard_lane("ramps", "Pitch/Roll Ramps", origin("ramps"), options, OSB, terrains.ramp_lane),
+        terrains.alleys_lane(options, origin("alleys")),
+        standard_lane("pallets", "Pallets & Pipes", origin("pallets"), options, PALLET_TOP, terrains.pallet_lane),
+        structures.door_lane(options, origin("doors")),
+        structures.avoid_lane(options, origin("avoid")),
+        structures.stair_lane(options, origin("stairs")),
+        maze.maze_lane(options, origin("maze")),
+    ]
 
 
 def point_polygon_distance(point, polygon):
@@ -680,13 +924,15 @@ def point_polygon_distance(point, polygon):
     return float(np.linalg.norm(delta - t[:, None] * edges, axis=1).min())
 
 
-def ground_mesh(count=3):
-    """Hall floor under `count` lanes, 5 m beyond the first and last lane origins."""
-    span = (count - 1) * LANE_SPACING
+def ground_mesh(lanes):
+    """Hall floor under every lane, 5 m past the outermost lane geometry and at least 10 m wide."""
+    points = np.concatenate([m.vertices[:, :2] for lane in lanes for m in lane.meshes])
+    lo, hi = points.min(axis=0) - 5.0, points.max(axis=0) + 5.0
+    lo[1], hi[1] = min(lo[1], -5.0), max(hi[1], 5.0)
     return box(
         "hall_floor",
-        (span / 2, 0.0, -0.05),
-        (span + 10.0, 10.0, 0.1),
+        ((lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, -0.05),
+        (hi[0] - lo[0], hi[1] - lo[1], 0.1),
         "ground",
         scan=True,
     )

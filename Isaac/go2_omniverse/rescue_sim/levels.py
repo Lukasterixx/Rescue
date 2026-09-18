@@ -42,11 +42,10 @@ RANDOM_CUP_X = (0.36, 0.44)
 RANDOM_CUP_Y = (-0.10, 0.10)
 RANDOM_HANDLE_BAND_DEG = 45.0
 
-# The cup demo's robot on the hall floor: 1.4 m in from the floor's west edge (competition.geometry.ground_mesh puts
-# it 5 m west of the first lane's origin) and 1.2 m clear of that lane's west end, facing west (-x), with a metre of
+# The cup demo's robot on the hall floor, 1.2 m west of the first lane's west end (x = -2.42) and facing west (-x),
+# away from every lane. competition.geometry.ground_mesh runs the floor 5 m past the lanes, so there are over 3 m of
 # floor beyond the cup.
-HALL_WEST_EDGE_X = -5.0
-CUP_DEMO_BASE_XY = (HALL_WEST_EDGE_X + 1.4, 0.0)
+CUP_DEMO_BASE_XY = (-3.6, 0.0)
 CUP_DEMO_YAW_DEG = 180.0
 
 

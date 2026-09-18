@@ -6,7 +6,7 @@ This is the Go2 with its D1 arm and wrist RealSense, in the RoboCup Rescue compe
 cd ~/Rescue/Isaac/go2_omniverse
 ./run_sim.sh                               # windowed, starting on the Shifty Gravel lane
 ./run_sim.sh --level cup                   # start in the cup demo
-./run_sim.sh --headless --smoke-steps 400  # load every level, stand up and walk, then exit
+./run_sim.sh --headless --smoke-steps 700  # load every level, stand up and walk, then exit
 ./run_sim.sh --help                        # every option
 ```
 
@@ -18,27 +18,38 @@ The **Rescue sim** window has one button per level. It opens as a tab beside the
 
 | Level | Key | What it is |
 | --- | --- | --- |
-| Shifty Gravel | F1 | Competition lane: framed OSB floors with loose gravel between rails |
-| Diagonal K-Rails | F2 | Competition lane: diagonal rails across 1.2 m panels |
-| K-Rail Square | F3 | The 2.4 m practice square, with the Linear Align/Inspect tasks |
-| Cup demo | F4 | D1Training's pick scene: the Go2 lying down, a 55 × 100 mm mug 42 cm ahead |
+| Shifty Gravel | `gravel` | Framed OSB floors with loose gravel between rails |
+| Diagonal K-Rails | `krails` | Diagonal rails across 1.2 m panels |
+| K-Rail Square | `square` | The 2.4 m practice square, with the Linear Align/Inspect tasks |
+| Half-Cubic Stepfields | `stepfields` | Chequered 15 and 30 cm plateaus |
+| Pitch/Roll Ramps | `ramps` | 15 cm ramps, peaks and valleys alternating |
+| Center in Alleys | `alleys` | Three dividers with doorways, alternating sides |
+| Pallets & Pipes | `pallets` | Grid pallets, two cells stacked, with pipes against the raised faces |
+| Push/Pull Doors | `doors` | A sprung 90 cm door on a hinge, with steps around it |
+| Avoid Holes/Posts | `avoid` | Ten purchased pallets in a meander, with loose posts to avoid |
+| Stair Debris \| Pallet Climb | `stairs` | A 45° stair to a landing, and a climb over stacked pallets |
+| Search & Map Maze | `maze` | The guide's example maze under a blackout tarp |
+| Cup demo | `cup` | D1Training's pick scene: the Go2 lying down, a 55 × 100 mm mug 42 cm ahead |
 
-The three lanes come from `../competition/`, which is a copy of `~/Rescue/competition` (see [The competition copy](#the-competition-copy)). Its README gives the fabrication details.
+The first eleven are the competition's lanes from `../competition/`, whose README gives the fabrication details and the options that change them (`--difficulty slopes`, `--stair-angle`, and others). A lane added there becomes a level here.
 
 Everything is built into one stage when the sim starts, so loading a level is a teleport, not a rebuild. A load does the following:
 - puts the robot on the level's start, with velocities zeroed;
 - puts the legs in the level's posture;
 - folds the arm back to its rest;
-- resets the gravel;
+- puts the gravel and the avoid lane's posts back where they started;
 - re-zeroes odometry;
 - clears the walking policy's history.
 
 Nav2 and the behaviour tree are not reset; they can send commands straight away.
 
 The window also has these buttons:
-- **Reset level** (Home or R) reloads the current level.
+- **Reset level** (Home or R) reloads the current level. Page Down and Page Up load the next and previous level.
 - **Lie down / Stand up** (L) ramps the legs over 1.5 s, as a Go2 does on command. The walking policy has the legs only while the robot is standing.
 - **New cup position** (cup demo only) moves the cup somewhere else in D1Training's band. That band is 0.36–0.44 m ahead and ±0.10 m to the side, with the handle within 45° of pointing straight at or away from the robot.
+- **Wrist light** turns a lamp beside the wrist camera on or off (`--wrist-light` starts with it on). The maze's tarp leaves its inside dark, so the camera needs it there. D1Training's camera has no lamp, so it starts off, and the images are D1Training's until it is turned on.
+
+Levels have no F-keys. Isaac Sim already uses F2 (rename), F7 (hide the whole UI), F10 (screenshot) and F11 (full screen).
 
 Driving keys:
 - **W A S D Q E:** drive the robot, as does `robot0/cmd_vel`.
@@ -46,7 +57,10 @@ Driving keys:
 
 Click the viewport first so it has keyboard focus.
 
-Scripts can do everything the window does through `/sim/level` (std_msgs/String). Send a level's key (`gravel`, `krails`, `square`, `cup`), or `reset`, `new_cup`, `lie` or `stand`.
+Scripts can do everything the window does through `/sim/level` (std_msgs/String). Send one of these:
+- a level's key, from the table above;
+- `reset`, `new_cup`, `lie` or `stand`;
+- `light_on` or `light_off`.
 
 **The viewport is yours.** Nothing moves it except one look at each level as it loads. To follow the robot, set Follow Mode to "Asset Root" in the IsaacLab tab's Viewer Settings. The old chase camera is gone.
 
@@ -131,7 +145,8 @@ Slow is safe for the arm. Its 10 Hz command hold counts sim time, and the VIP-Re
 
 **Checked on 2026-09-18:**
 - **Unit tests.** `python -m unittest discover -s rescue_sim/tests -t .` runs 32 of them: the firmware through its wire protocol, the levels and the posture ramp. They include parity with D1Training on fixed inputs (`tests/fixtures/d1training.json`, written by `tests/make_fixtures.py` from D1Training 5e19028): the planner's trajectories, the calibration's camera model, the mount, the depth noise and the case registration.
-- **Smoke run.** `--smoke-steps 400` loads every level, stands the lying robot up and walks.
+- **Smoke run.** `--smoke-steps 700` loads all twelve levels, each within 5 cm of its start, then stands the lying robot up and walks. It turns the wrist light on for the maze. `--smoke-shots DIR` saves the wrist camera's image after each load.
+- **The wrist light in the maze.** From a room under the tarp, the wrist camera's image averaged 55 of 255 with the light off and 102 with it on. The walls and fiducials are dim without it, not black.
 - **The cup pick end to end, as the robot runs it.** This is the unchanged C++ cup pick (`cup_pick_launch.py robot:=sim`), through `arm_bridge.py --sim` with the team's D1 driver. It found the cup from the survey look, planned an outside grasp and lifted it **11.9 cm** by `/sim/cup_pose`, in 22.7 s of sim time.
 - **`ArmToPose` and `ArmStow`.** They moved the arm to the wall scanner's shape, aimed at 0 and at 1 rad, and folded it back each time.
 
@@ -140,12 +155,13 @@ Slow is safe for the arm. Its 10 Hz command hold counts sim time, and the VIP-Re
 - The wall scanner in a full mission.
 - Anything on the real robot.
 - Gravel behaviour; see `../competition/README.md`.
+- Walking any of the eight newer lanes (stepfields to maze), or pushing the door. The smoke run only loads them.
 
 ## Files
 
 | File | |
 | --- | --- |
-| `sim.py` | Arguments, startup, the loop, the smoke run |
+| `sim.py` | Arguments, startup, the loop, the wrist light, the smoke run |
 | `env_cfg.py` | The environment: Rescue's walking setup for the legs, D1Training's arm and camera, the cup, the competition terrain |
 | `levels.py`, `runtime.py` | The level catalogue, the cup demo and the posture ramp; loading, the window and the keys |
 | `d1_model.py` | D1Training's arm constants, planner and sampler, verbatim, and the real arm's wire conventions |
@@ -153,24 +169,3 @@ Slow is safe for the arm. Its 10 Hz command hold counts sim time, and the VIP-Re
 | `realsense.py`, `camera_asset.py`, `cup_asset.py` | The camera model, mount, depth noise and ROS publisher, the case, and the cup, from D1Training |
 | `ros_io.py` | The ROS node, the lidar, the IMU |
 | `assets/` | The calibration, the mount, the D435 case mesh and the cup model, with their licences |
-
-## The competition copy
-
-`../competition/` is `~/Rescue/competition` as it stood on 2026-09-18. Another session is adding arenas to the original, so the original is left alone.
-
-This sim uses the copy's geometry, build and textures, and its `GravelReset`. The copy's `runtime.py` `CompetitionRuntime` was the original's adapter onto the old sim, and nothing here uses it.
-
-The original's launcher still imports the old sim's modules at runtime. They stay until its arenas are merged in:
-- `omniverse_sim.py`, `ros2.py`, `custom_rl_env.py`, `omnigraph.py`
-- `arm_mount.py`, `d1_ik_controller.py`, `d1_sdk/d1_sim_server.py`
-- `terrain_cfg.py`, `terrain_generator_cfg.py`, `maze_terrain.py`, `arena_layout.py`, `arena_terrain.py`, `robots/`
-
-`d1_sdk/d1_client.py` and `d1_sdk/README.md` also describe the old sim's arm: identity servo signs, the gripper in millimetres. They are wrong for this one.
-
-To merge:
-1. Copy the original's `geometry.py`, `build.py`, `textures.py`, tests and README over the copy.
-2. Delete `~/Rescue/competition` and the modules listed above.
-3. Keep `d1_sdk/d1_msgs.py` and `d1_protocol.py`, which this sim uses. Drop the client and server imports from `d1_sdk/__init__.py`, and fix or delete the client.
-4. Point `training/measure_bench.py` at `rescue_sim.env_cfg` instead of `custom_rl_env`.
-
-New lanes become levels on their own.

@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .geometry import COLORS, Options, build_lanes, combine, ground_mesh, stone_shape
+from .geometry import COLORS, Mesh, Options, build_lanes, combine, ground_mesh, stone_shape
 
 ROOT = "/Competition"
 TERRAIN_PATH = "/World/competition/terrain"
@@ -93,19 +93,29 @@ def export_scene(output: Path, options=Options()):
         physics.CreateRestitutionAttr(0.0)
         materials[name] = material
 
-    all_meshes = [ground_mesh(len(lanes))] + [mesh for lane in lanes for mesh in lane.meshes]
+    all_meshes = [ground_mesh(lanes)] + [mesh for lane in lanes for mesh in lane.meshes]
     # Explicit scanner target. Excludes railings and support frames; includes
     # the K-Rails and the initial perceived surface of the loose aggregate.
     scan = combine([mesh for mesh in all_meshes if mesh.scan])
     scanner = _mesh(stage, f"{ROOT}/WalkableScan", scan)
     scanner.CreateVisibilityAttr(UsdGeom.Tokens.invisible)
+    centers = {}
     for data in all_meshes:
         if not data.collision and data.name.endswith("_gravel_scan"):
             continue
         owner = next(
             (lane.key for lane in lanes if any(data is m for m in lane.meshes)), "hall"
         )
-        mesh = _mesh(stage, f"{ROOT}/Structure/{owner}/{data.name}", data)
+        path = f"{ROOT}/Structure/{owner}/{data.name}"
+        if data.dynamic:
+            # Loose bodies (door leaf, avoid posts) are authored about their centroid with a
+            # translate op, so the runtime can put them back with a pose.
+            center = data.vertices.mean(axis=0)
+            centers[(owner, data.name)] = center
+            mesh = _mesh(stage, path, Mesh(data.name, data.vertices - center, data.faces))
+            UsdGeom.Xformable(mesh).AddTranslateOp().Set(Gf.Vec3d(*map(float, center)))
+        else:
+            mesh = _mesh(stage, path, data)
         uv = None
         if data.uv is not None:
             # Authored per vertex (the inspect targets): one texture across the face.
@@ -129,10 +139,37 @@ def export_scene(output: Path, options=Options()):
         binding.Bind(material)
         if data.collision:
             UsdPhysics.CollisionAPI.Apply(mesh.GetPrim())
+            # PhysX cannot simulate a moving triangle mesh, so loose bodies get a hull.
             UsdPhysics.MeshCollisionAPI.Apply(mesh.GetPrim()).CreateApproximationAttr(
-                "none"
+                "convexHull" if data.dynamic else "none"
             )
             binding.Bind(material, materialPurpose="physics")
+        if data.dynamic:
+            UsdPhysics.RigidBodyAPI.Apply(mesh.GetPrim())
+            UsdPhysics.MassAPI.Apply(mesh.GetPrim()).CreateMassAttr(float(data.mass))
+    for lane in lanes:
+        for joint in lane.joints:
+            hinge = UsdPhysics.RevoluteJoint.Define(
+                stage, f"{ROOT}/Structure/{lane.key}/{joint.name}"
+            )
+            if joint.body0:
+                hinge.CreateBody0Rel().SetTargets([f"{ROOT}/Structure/{lane.key}/{joint.body0}"])
+            hinge.CreateBody1Rel().SetTargets([f"{ROOT}/Structure/{lane.key}/{joint.body1}"])
+            pivot = np.asarray(joint.pivot, dtype=float)
+            hinge.CreateLocalPos0Attr(Gf.Vec3f(*map(float, pivot)))
+            hinge.CreateLocalPos1Attr(
+                Gf.Vec3f(*map(float, pivot - centers[(lane.key, joint.body1)]))
+            )
+            hinge.CreateAxisAttr("Z")
+            hinge.CreateLowerLimitAttr(float(joint.limits[0]))
+            hinge.CreateUpperLimitAttr(float(joint.limits[1]))
+            drive = UsdPhysics.DriveAPI.Apply(hinge.GetPrim(), "angular")
+            drive.CreateTypeAttr("force")
+            # UsdPhysics angular drive gains are per DEGREE; Joint's are per radian.
+            per_degree = math.pi / 180.0
+            drive.CreateStiffnessAttr(float(joint.stiffness) * per_degree)
+            drive.CreateDampingAttr(float(joint.damping) * per_degree)
+            drive.CreateTargetPositionAttr(0.0)
 
     # Class prim prototypes author no extra visible/physical objects. Instance
     # roots are rigid bodies, allowing a batched RigidPrim reset in the runtime.
@@ -192,6 +229,8 @@ def export_scene(output: Path, options=Options()):
                 "rotation_wxyz": lane.spawn_rotation,
                 "railings": lane.railing_count,
                 "stones": len(lane.stones),
+                "loose_bodies": [m.name for m in lane.dynamic_meshes()],
+                "joints": [j.name for j in lane.joints],
             }
             for lane in lanes
         ],
@@ -214,10 +253,18 @@ def preview_scene(output, options=Options()):
 
     lanes = build_lanes(options)
     count = len(lanes)
-    figure = plt.figure(figsize=(8 * count, 10), facecolor="#f1ede6", layout="constrained")
+    cols = min(count, 6)
+    bands = math.ceil(count / cols)
+    figure = plt.figure(
+        figsize=(4.4 * cols, 5.6 * bands), facecolor="#f1ede6", layout="constrained"
+    )
     for i, lane in enumerate(lanes):
-        ax = figure.add_subplot(2, count, i + 1, projection="3d")
-        top = figure.add_subplot(2, count, count + i + 1)
+        band, col = divmod(i, cols)
+        ax = figure.add_subplot(2 * bands, cols, 2 * band * cols + col + 1, projection="3d")
+        top = figure.add_subplot(2 * bands, cols, (2 * band + 1) * cols + col + 1)
+        extent = np.concatenate([m.vertices for m in lane.meshes]) - lane.origin
+        lo, hi = extent.min(axis=0) - 0.3, extent.max(axis=0) + 0.3
+        height = max(hi[2], 1.9)
         all_triangles, all_colors, top_faces = [], [], []
         for material, color in COLORS.items():
             meshes = [m for m in lane.meshes if m.material == material and m.collision]
@@ -272,19 +319,19 @@ def preview_scene(output, options=Options()):
             weight="bold",
             fontsize=9,
         )
-        ax.set(xlim=(-2.7, 2.7), ylim=(-2.0, 2.6), zlim=(0, 1.9))
-        ax.set_box_aspect((5.4, 4.6, 1.9))
+        ax.set(xlim=(lo[0], hi[0]), ylim=(lo[1], hi[1]), zlim=(0, height))
+        ax.set_box_aspect((hi[0] - lo[0], hi[1] - lo[1], height))
         ax.view_init(elev=32, azim=-65)
         ax.set_axis_off()
-        ax.set_title(f"F{i+1}  {lane.title}", fontweight="bold", fontsize=18)
+        ax.set_title(f"F{i+1}  {lane.title}", fontweight="bold", fontsize=13)
         top.set(
-            xlim=(-2.7, 2.7),
-            ylim=(-2.0, 2.6),
+            xlim=(lo[0], hi[0]),
+            ylim=(lo[1], hi[1]),
             aspect="equal",
             xlabel="metres",
             ylabel="metres",
         )
-        top.set_title(lane.subtitle, fontsize=10)
+        top.set_title(lane.subtitle, fontsize=8)
         for a in (ax, top):
             a.set_facecolor("#f1ede6")
     figure.suptitle(
@@ -307,10 +354,32 @@ def add_geometry_args(parser):
     )
     parser.add_argument("--gravel", choices=("dynamic", "static"), default="dynamic")
     parser.add_argument("--gravel-seed", type=int, default=2026)
+    parser.add_argument(
+        "--alley-width", type=float, default=0.45, help="Center in Alleys doorway, metres"
+    )
+    parser.add_argument(
+        "--door-floor",
+        choices=("flat", "square", "half"),
+        default="flat",
+        help="Doors: full floor, yellow square steps removed, orange half steps removed too",
+    )
+    parser.add_argument("--stair-angle", type=float, default=45.0, help="Stair incline, 35-45")
+    parser.add_argument(
+        "--stair-debris", type=int, default=0, help="Hinged debris rails on the stair, 0-3"
+    )
 
 
 def options_from_args(args):
-    return Options(args.difficulty, args.k_rail_height, args.gravel, args.gravel_seed)
+    return Options(
+        args.difficulty,
+        args.k_rail_height,
+        args.gravel,
+        args.gravel_seed,
+        args.alley_width,
+        args.door_floor,
+        args.stair_angle,
+        args.stair_debris,
+    )
 
 
 def main():

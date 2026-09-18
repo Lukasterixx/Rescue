@@ -23,12 +23,11 @@ class CatalogueTests(unittest.TestCase):
         self.assertEqual(lv.CUP_DEMO.posture, lv.LYING)
 
     def test_the_cup_demo_sits_on_the_hall_floor_clear_of_every_lane(self):
-        floor = ground_mesh(len(self.lanes))
+        floor = ground_mesh(self.lanes)
         low, high = floor.vertices.min(axis=0), floor.vertices.max(axis=0)
-        self.assertAlmostEqual(low[0], lv.HALL_WEST_EDGE_X)
         cup = lv.cup_pose(lv.CUP_DEMO)
         for x, y in (lv.CUP_DEMO.spawn[:2], cup[:2]):
-            self.assertTrue(low[0] + 0.5 < x < high[0] and low[1] + 0.5 < y < high[1] - 0.5, (x, y))
+            self.assertTrue(low[0] + 1.0 < x < high[0] and low[1] + 1.0 < y < high[1] - 1.0, (x, y))
         # Nothing of any lane within a metre of the robot or the cup.
         structure = np.vstack([mesh.vertices for lane in self.lanes for mesh in lane.meshes if mesh.collision])
         for point in (np.array(lv.CUP_DEMO.spawn[:2]), np.array(cup[:2])):

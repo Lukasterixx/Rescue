@@ -60,6 +60,24 @@ class UsdExportTests(unittest.TestCase):
                 self.assertTrue(st.IsDefined())
                 faces = UsdGeom.Mesh(target).GetFaceVertexCountsAttr().Get()
                 self.assertEqual(len(st.Get()), 3 * len(faces))
+                # The door leaf is a hull-collided rigid body on a sprung revolute joint.
+                leaf = stage.GetPrimAtPath(str(root.GetPath()) + "/Structure/doors/door_leaf")
+                self.assertTrue(leaf.HasAPI(UsdPhysics.RigidBodyAPI))
+                self.assertEqual(UsdPhysics.MeshCollisionAPI(leaf).GetApproximationAttr().Get(), "convexHull")
+                hinge = UsdPhysics.RevoluteJoint(stage.GetPrimAtPath(str(root.GetPath()) + "/Structure/doors/door_hinge"))
+                self.assertTrue(hinge)
+                self.assertEqual([str(p) for p in hinge.GetBody1Rel().GetTargets()], [str(leaf.GetPath())])
+                self.assertEqual(hinge.GetUpperLimitAttr().Get(), 100.0)
+                self.assertGreater(UsdPhysics.DriveAPI(hinge.GetPrim(), "angular").GetStiffnessAttr().Get(), 0)
+                # Avoid posts are loose bodies with a translate op the reset can drive.
+                post = stage.GetPrimAtPath(str(root.GetPath()) + "/Structure/avoid/post_00")
+                self.assertTrue(post.HasAPI(UsdPhysics.RigidBodyAPI))
+                self.assertTrue(UsdGeom.Xformable(post).GetOrderedXformOps())
+                # Static structure keeps exact triangle collision and no rigid body.
+                wall = stage.GetPrimAtPath(str(root.GetPath()) + "/Structure/maze/wall_00")
+                self.assertFalse(wall.HasAPI(UsdPhysics.RigidBodyAPI))
+                self.assertEqual(UsdPhysics.MeshCollisionAPI(wall).GetApproximationAttr().Get(), "none")
+                self.assertFalse(stage.GetPrimAtPath(str(root.GetPath()) + "/Structure/maze/tarp").HasAPI(UsdPhysics.CollisionAPI))
 
 
 if __name__ == "__main__":
