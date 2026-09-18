@@ -21,7 +21,7 @@ FAKE_BRIDGE = textwrap.dedent('''
     parser.add_argument("--port", type=int)
     args = parser.parse_args()
     assert args.sim, "the sim must start the bridge in --sim mode"
-    print("fake bridge: driver at", os.environ["D1_DRIVER_ROOT"], flush=True)
+    print("fake bridge: up", flush=True)
     # The real bridge talks a lot, not all of it ASCII: 200 kB of it before listening, more than any pipe holds.
     for i in range(2000):
         print(f"line {i} \u2014 connected to the simulated arm \u2014 manual control " + "x" * 40, flush=True)
@@ -45,7 +45,6 @@ class ResolveTests(unittest.TestCase):
         self.root = Path(tempfile.mkdtemp())
         self.env = mock.patch.dict(os.environ, {"VIP_RESCUE_ROOT": str(self.root)})
         self.env.start()
-        os.environ.pop("D1_DRIVER_ROOT", None)
 
     def tearDown(self):
         self.env.stop()
@@ -55,7 +54,7 @@ class ResolveTests(unittest.TestCase):
         script.parent.mkdir(parents=True)
         script.write_text(FAKE_BRIDGE)
         if driver:
-            marker = self.root / br.DRIVER_IN_REPO / br.DRIVER_MARKER
+            marker = script.parent / br.DRIVER_BESIDE_BRIDGE
             marker.parent.mkdir(parents=True)
             marker.write_text("")
         return script
@@ -74,16 +73,14 @@ class ResolveTests(unittest.TestCase):
         self.make_repo(driver=False)
         bridge, why = br.ArmBridge.resolve("auto")
         self.assertIsNone(bridge)
-        self.assertIn("git submodule update --init", why)
+        self.assertIn("no D1 driver", why)
 
     def test_finds_vip_rescues_bridge_and_driver(self):
         script = self.make_repo()
         bridge, why = br.ArmBridge.resolve("auto")
         self.assertIsNone(why)
         self.assertEqual(bridge.script, script)
-        self.assertEqual(bridge.driver, self.root / br.DRIVER_IN_REPO)
-        with mock.patch.dict(os.environ, {"D1_DRIVER_ROOT": str(self.root / br.DRIVER_IN_REPO)}):
-            self.assertIsNotNone(br.ArmBridge.resolve(str(script))[0])
+        self.assertIsNotNone(br.ArmBridge.resolve(str(script))[0])
 
 
 class LifecycleTests(unittest.TestCase):
@@ -94,7 +91,7 @@ class LifecycleTests(unittest.TestCase):
         self.port = free_port()
 
     def test_starts_listens_and_stops(self):
-        bridge = br.ArmBridge(self.script, self.dir, port=self.port, log_path=self.dir / "bridge.log")
+        bridge = br.ArmBridge(self.script, port=self.port, log_path=self.dir / "bridge.log")
         self.assertTrue(bridge.start())
         self.assertIn("\u2014 connected to the simulated arm", (self.dir / "bridge.log").read_text(encoding="utf-8"))
         self.assertTrue(br.listening("127.0.0.1", self.port))
@@ -110,7 +107,7 @@ class LifecycleTests(unittest.TestCase):
             import os, sys
             sys.path.insert(0, {str(Path(__file__).resolve().parents[2])!r})
             from rescue_sim import bridge as br
-            b = br.ArmBridge({str(self.script)!r}, {str(self.dir)!r}, port={self.port}, log_path={str(self.dir / 'bridge.log')!r})
+            b = br.ArmBridge({str(self.script)!r}, port={self.port}, log_path={str(self.dir / 'bridge.log')!r})
             assert b.start()
             os._exit(0)
         ''')
@@ -122,10 +119,10 @@ class LifecycleTests(unittest.TestCase):
         self.assertFalse(br.listening("127.0.0.1", self.port), "the bridge outlived the sim that started it")
 
     def test_leaves_a_bridge_that_is_already_there(self):
-        first = br.ArmBridge(self.script, self.dir, port=self.port, log_path=self.dir / "bridge.log")
+        first = br.ArmBridge(self.script, port=self.port, log_path=self.dir / "bridge.log")
         self.assertTrue(first.start())
         try:
-            second = br.ArmBridge(self.script, self.dir, port=self.port, log_path=self.dir / "bridge.log")
+            second = br.ArmBridge(self.script, port=self.port, log_path=self.dir / "bridge.log")
             self.assertFalse(second.start())
             self.assertIsNone(second.process)
         finally:

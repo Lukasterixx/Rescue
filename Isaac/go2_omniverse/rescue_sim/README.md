@@ -6,6 +6,9 @@ This is the Go2 with its D1 arm and wrist RealSense, in the RoboCup Rescue compe
 cd ~/Rescue/Isaac/go2_omniverse
 ./run_sim.sh                               # windowed, starting on the Shifty Gravel lane
 ./run_sim.sh --level cup                   # start in the cup demo
+./run_sim.sh --level stairs                # clear stairs and pallet climb
+./run_sim.sh --level stair_debris          # debris stairs, red braces and pallet climb
+./run_sim.sh --level ramps_obstacles       # sloped ramps with rotating slip disks and pinch points
 ./run_sim.sh --headless --smoke-steps 800  # load every level, lie down and stand up, then exit
 ./run_sim.sh --help                        # every option
 ```
@@ -14,42 +17,54 @@ The VIP-Rescue website's Dev tab launches the same `run_sim.sh`.
 
 ## Levels
 
-The **Rescue sim** window has one button per level. It opens as a tab beside the Stage panel.
+The **Rescue sim** window opens as a tab beside the Stage panel, with a row for each arena. An arena with one level is one button. An arena with settings has its name over a button for each: **Flat**, **Slopes 15°** and **Obstacles** for the K-Rails, stepfields and ramps (the guide's Prelims, Prelims/Semis and Semis/Finals columns), Flat and Slopes 15° for Center in Alleys, and Clear and Debris for the stairs. The loaded level's button reads `> `; hovering a button shows the level's full title, what it is and its key. The list scrolls when the dock is short.
 
-| Level | Key | What it is |
-| --- | --- | --- |
-| Shifty Gravel | `gravel` | Framed OSB floors with loose gravel between rails |
-| Diagonal K-Rails | `krails` | Diagonal rails across 1.2 m panels |
-| K-Rail Square | `square` | The 2.4 m practice square, with the Linear Align/Inspect tasks |
-| Half-Cubic Stepfields | `stepfields` | Diagonal zigzag ridges of 30 cm plateaus with 15 cm ones on every side |
-| Pitch/Roll Ramps | `ramps` | 15 cm ramps, peaks and valleys alternating |
-| Center in Alleys | `alleys` | Three dividers with doorways, alternating sides |
-| Pallets & Pipes | `pallets` | Grid pallets, two cells stacked, with pipes against the raised faces |
-| Push/Pull Doors | `doors` | A sprung 90 cm door on a hinge, with steps around it |
-| Avoid Holes/Posts | `avoid` | Ten purchased pallets in a meander, with loose posts to avoid |
-| Stair Debris \| Pallet Climb | `stairs` | A 45° stair to a landing, and a climb over stacked pallets |
-| Search & Map Maze | `maze` | The guide's example maze under a blackout tarp |
-| Cup demo | `cup` | D1Training's pick scene: the Go2 lying down, a 55 × 100 mm mug 42 cm ahead |
+| Arena | Setting | Key | What it is |
+| --- | --- | --- | --- |
+| Shifty Gravel | | `gravel` | Framed OSB floors with loose gravel between rails |
+| Diagonal K-Rails | Flat | `krails` | Diagonal rails across 1.2 m panels |
+| | Slopes 15° | `krails_slopes` | The same, with the centre floors tilted 15° in opposite directions |
+| | Obstacles | `krails_obstacles` | The slopes, with the rails layered to 20 cm and four red pinch points on the railings |
+| K-Rail Square | | `square` | The 2.4 m practice square, with the Linear Align/Inspect tasks |
+| Half-Cubic Stepfields | Flat | `stepfields` | Diagonal zigzag ridges of 30 cm plateaus with 15 cm ones on every side |
+| | Slopes 15° | `stepfields_slopes` | The same, on the opposing 15° centre floors |
+| | Obstacles | `stepfields_obstacles` | The slopes, with four pinch points |
+| Pitch/Roll Ramps | Flat | `ramps` | 15 cm ramps, peaks and valleys alternating |
+| | Slopes 15° | `ramps_slopes` | The same, on the opposing 15° centre floors |
+| | Obstacles | `ramps_obstacles` | The slopes, with a rotating slip disk on every ramp and four pinch points |
+| Center in Alleys | Flat | `alleys` | Three dividers with doorways, alternating sides |
+| | Slopes 15° | `alleys_slopes` | The same, with both far floors rising 15°, so the hallways slope sideways |
+| Pallets & Pipes | | `pallets` | Grid pallets, two cells stacked, with pipes against the raised faces |
+| Push/Pull Doors | | `doors` | A sprung 90 cm door on a hinge, with steps around it |
+| Avoid Holes/Posts | | `avoid` | Ten purchased pallets in a meander, with loose posts to avoid |
+| Stairs \| Pallet Climb | Clear | `stairs` | A clear 45° stair to a landing, pallet climb, supported side rails and two belay frames |
+| | Debris | `stair_debris` | The same arena with yellow/orange/red beams leaning from treads to side supports, plus red diagonals crossing the path above and below the landing |
+| Search & Map Maze | | `maze` | The guide's example maze under a blackout tarp |
+| Cup demo | | `cup` | D1Training's pick scene: the Go2 lying down, a 55 × 100 mm mug 42 cm ahead |
 
-The first eleven are the competition's lanes from `../competition/`, whose README gives the fabrication details and the options that change them (`--difficulty slopes`, `--stair-angle`, and others). A lane added there becomes a level here.
+All but the cup demo are the competition's lanes from `../competition/`, whose README gives the fabrication details, what is our own reading of the guide, and the options that change them (`--layered-k-rail-height`, `--stair-angle`, and others). The sloped and obstacle copies stand at the far end of the hall, past the maze, but share their arena's row. `--difficulty slopes` now tilts only gravel and pallets, which have no sloped level of their own. A lane added there becomes a level here.
+
+Both stair variants are available in the same session. `--stair-angle` adjusts both; `--stair-debris 0–3`
+sets the debris copy's difficulty (default 3). The clear copy always has no debris or red braces.
+Debris is fixed collision geometry; the unloaded belay ropes are visual only.
 
 Everything is built into one stage when the sim starts, so loading a level is a teleport, not a rebuild. A load does the following:
 - puts the robot on the level's start, with velocities zeroed;
 - puts the legs in the level's posture;
 - folds the arm back to its rest;
-- puts the gravel and the avoid lane's posts back where they started;
+- puts the gravel, the avoid lane's posts and the ramps' slip disks back where they started;
 - re-zeroes odometry;
 - clears the walking policy's history.
 
 Nav2 and the behaviour tree are not reset; they can send commands straight away.
 
 The window also has these buttons:
-- **Reset level** (Home or R) reloads the current level. Page Down and Page Up load the next and previous level.
+- **Reset level** (Home or R) reloads the current level.
 - **Lie down / Stand up** (L) ramps the legs over 1.5 s, as a Go2 does on command. The walking policy has the legs only while the robot is standing. The cup demo refuses it: the robot stays lying there and holds still, as in D1Training's pick scene.
 - **New cup position** (cup demo only) moves the cup somewhere else in D1Training's band. That band is 0.36–0.44 m ahead and ±0.10 m to the side, with the handle within 45° of pointing straight at or away from the robot.
 - **Wrist light** turns a lamp beside the wrist camera on or off (`--wrist-light` starts with it on). The maze's tarp leaves its inside dark, so the camera needs it there. D1Training's camera has no lamp, so it starts off, and the images are D1Training's until it is turned on.
 
-Levels have no F-keys. Isaac Sim already uses F2 (rename), F7 (hide the whole UI), F10 (screenshot) and F11 (full screen).
+Levels have no keys: there are twenty, too many to step through, so the window's buttons (or `/sim/level`) pick them. Isaac Sim already uses F2 (rename), F7 (hide the whole UI), F10 (screenshot) and F11 (full screen) anyway.
 
 Driving keys:
 - **W A S D Q E:** drive the robot, as does `robot0/cmd_vel`.
@@ -77,7 +92,7 @@ In the VIP-Rescue stack that is `maps/arm_bridge.py --sim`, the bridge the robot
 - `ArmToPose` and `ArmStow` use it too.
 - Their inverse kinematics runs in C++ (`go2_control_cpp/src/d1_arm`).
 
-The sim finds the bridge under `$VIP_RESCUE_ROOT` (default `~/VIP-Rescue`) and the driver in that repo's `Docker/unitree-d1-control` submodule (`git submodule update --init Docker/unitree-d1-control` once; `$D1_DRIVER_ROOT` points elsewhere). If a bridge is already listening on 8084, the sim leaves it to serve the arm and starts none. `--arm-bridge off` starts none; `--arm-bridge PATH` starts another script. The bridge logs to `rescue_sim/generated/arm_bridge.log`, and it exits with the sim, even when the window is closed.
+The sim finds the bridge under `$VIP_RESCUE_ROOT` (default `~/VIP-Rescue`), with the D1 driver beside it in `maps/d1_driver`. A VIP-Rescue checkout from before the driver moved there (when it was the `Docker/unitree-d1-control` submodule) is refused, with the reason. If a bridge is already listening on 8084, the sim leaves it to serve the arm and starts none. `--arm-bridge off` starts none; `--arm-bridge PATH` starts another script. The bridge logs to `rescue_sim/generated/arm_bridge.log`, and it exits with the sim, even when the window is closed.
 
 The sim-side IK controller and `/arm_commands` are gone.
 
@@ -146,8 +161,10 @@ Slow is safe for the arm. Its 10 Hz command hold counts sim time, and the VIP-Re
 ## Checked, and not
 
 **Checked on 2026-09-18:**
-- **Unit tests.** `python -m unittest discover -s rescue_sim/tests -t .` runs 38 of them: the firmware through its wire protocol, the levels, the posture ramp, and starting and stopping the arm bridge. They include parity with D1Training on fixed inputs (`tests/fixtures/d1training.json`, written by `tests/make_fixtures.py` from D1Training 5e19028): the planner's trajectories, the calibration's camera model, the mount, the depth noise and the case registration.
-- **Smoke run.** `--smoke-steps 800` loads all twelve levels, each within 5 cm of its start. It asks the cup demo to stand up and checks that it stays lying. Then it goes back to the first lane, lies down, stands up and walks. It turns the wrist light on for the maze. `--smoke-shots DIR` saves the wrist camera's image after each load.
+- **Unit tests.** `python -m unittest discover -s rescue_sim/tests -t .` runs 40 of them: the firmware through its wire protocol, the levels and the window's rows, the posture ramp, and starting and stopping the arm bridge. They include parity with D1Training on fixed inputs (`tests/fixtures/d1training.json`, written by `tests/make_fixtures.py` from D1Training 5e19028): the planner's trajectories, the calibration's camera model, the mount, the depth noise and the case registration.
+- **Smoke run with all twenty levels.** `--smoke-steps 1100 --arm-bridge off`, headless and again in a window, loaded every level, each within 5 cm of its start, and passed, at 0.57× real time headless. It asks the cup demo to stand up and checks that it stays lying. Then it goes back to the first lane, lies down, stands up and walks. It turns the wrist light on for the maze. `--smoke-shots DIR` saves the wrist camera's image after each load, and in a window the viewport and the whole window too. PhysX cooked every slip disk's hull for the GPU.
+- **The level window,** from those window captures: in the default window's narrow dock beside Stage, single-level arenas are full-width buttons and the K-Rails, stepfields, ramps, alleys and stairs rows show all their setting buttons, the loaded one highlighted.
+- **The slip disks' physics,** in a probe on the GPU pipeline at the sim's 5 ms step: a disk stays seated, turns when pushed across its radius past its seat's friction, holds against a push along it, and lifts only the bolt's 5 mm. `../competition/README.md` has the numbers.
 - **The wrist light in the maze.** From a room under the tarp, the wrist camera's image averaged 55 of 255 with the light off and 102 with it on. The walls and fiducials are dim without it, not black.
 - **The cup pick end to end, as the robot runs it.** This is the unchanged C++ cup pick (`cup_pick_launch.py robot:=sim`), through `arm_bridge.py --sim` with the team's D1 driver. It found the cup from the survey look, planned an outside grasp and lifted it **11.9 cm** by `/sim/cup_pose`, in 22.7 s of sim time.
 - **`ArmToPose` and `ArmStow`.** They moved the arm to the wall scanner's shape, aimed at 0 and at 1 rad, and folded it back each time.
@@ -157,7 +174,7 @@ Slow is safe for the arm. Its 10 Hz command hold counts sim time, and the VIP-Re
 - The wall scanner in a full mission.
 - Anything on the real robot.
 - Gravel behaviour; see `../competition/README.md`.
-- Walking any of the eight newer lanes (stepfields to maze), or pushing the door. The smoke run only loads them.
+- Walking any lane from the stepfields on, including all seven sloped and obstacle copies, or pushing the door. The smoke run only loads them. Whether the walking policy copes with 15° side slopes, 20 cm rails, pinch points or turning disks is unknown.
 
 ## Files
 
@@ -165,7 +182,7 @@ Slow is safe for the arm. Its 10 Hz command hold counts sim time, and the VIP-Re
 | --- | --- |
 | `sim.py` | Arguments, startup, the loop, the wrist light, the smoke run |
 | `env_cfg.py` | The environment: Rescue's walking setup for the legs, D1Training's arm and camera, the cup, the competition terrain |
-| `levels.py`, `runtime.py` | The level catalogue, the cup demo and the posture ramp; loading, the window and the keys |
+| `levels.py`, `runtime.py` | The level catalogue and the window's rows, the cup demo and the posture ramp; loading, the window and the keys |
 | `d1_model.py` | D1Training's arm constants, planner and sampler, verbatim, and the real arm's wire conventions |
 | `d1_arm.py`, `d1_drive.py` | The simulated firmware and its DDS link, and where it meets PhysX |
 | `bridge.py` | VIP-Rescue's arm bridge, started and stopped with the sim |
