@@ -6,7 +6,31 @@ import isaaclab.terrains as terrain_gen
 
 # --- IMPORT CONFIG AND FUNCTION ---
 from maze_terrain import MazeTerrainCfg, generate_maze_terrain
+from arena_terrain import ArenaTerrainCfg, generate_arena_terrain
 
+# THE OBSTACLE ARENA (2026-09-18), the default world: the 2.4 m x 2.4 m course from the design
+# drawing, every dimension in arena_layout.py. The sub-terrain is a flat floor slab with the
+# arena in its middle, so `size` is how much room the robot has around the structure.
+# custom_rl_env.py picks this unless the sim is launched with `--custom_env maze`.
+ARENA_TERRAIN_CFG = TerrainGeneratorCfg(
+    size=(10.0, 10.0),
+    border_width=0.0,
+    num_rows=1,
+    num_cols=1,
+    horizontal_scale=0.1,
+    vertical_scale=0.005,
+    slope_threshold=0.75,
+    use_cache=False,
+    sub_terrains={
+        "arena": ArenaTerrainCfg(
+            function=generate_arena_terrain,
+            proportion=1.0,
+            size=(10.0, 10.0),  # overwritten by the generator's size above
+        ),
+    },
+)
+
+# THE MAZE, the previous default, kept behind `--custom_env maze`.
 ROUGH_TERRAINS_CFG = TerrainGeneratorCfg(
     size=(12.0, 12.0),
     border_width=0.0,

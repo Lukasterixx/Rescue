@@ -2,6 +2,7 @@
 
 import math
 import unittest
+from collections import Counter
 
 import numpy as np
 
@@ -58,7 +59,9 @@ class LaneGeometryTests(unittest.TestCase):
         self.assertLess(len(self.flat[0].stones), 12000)
 
     def test_15_degree_opposing_floors(self):
-        for lane in self.slopes[:2]:  # the square's floors stay flat
+        # --difficulty tilts the gravel lane; the K-Rails have a sloped level of their own.
+        lanes = {lane.key: lane for lane in self.slopes}
+        for lane in (lanes["gravel"], lanes["krails_slopes"]):
             self.assertAlmostEqual(lane.floors[1].pitch, math.radians(15))
             self.assertAlmostEqual(lane.floors[2].pitch, -math.radians(15))
             for floor in lane.floors[1:3]:
@@ -210,7 +213,6 @@ class RemainingLaneTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.lanes = {lane.key: lane for lane in build_lanes()}
-        cls.slopes = {lane.key: lane for lane in build_lanes(Options(difficulty="slopes"))}
 
     def named(self, key, prefix="", suffix=""):
         return [m for m in self.lanes[key].meshes if m.name.startswith(prefix) and m.name.endswith(suffix)]
@@ -230,13 +232,44 @@ class RemainingLaneTests(unittest.TestCase):
         for (_, right), (left, _) in zip(spans, spans[1:]):
             self.assertLess(right, left)
 
-    def test_stepfields_three_elevations(self):
+    def test_stepfields_zigzag_with_lower_steps_on_every_side(self):
         tops = self.named("stepfields", suffix="_top")
         self.assertEqual(len(self.named("stepfields", suffix="_base")), 32)
-        heights = sorted({round(float(m.vertices[:, 2].max() - DECK - OSB), 3) for m in tops})
-        self.assertEqual(heights, [0.15, 0.30])
-        self.assertEqual(len(tops), 16 * 3 + 16)  # quads carry three plateaus, singles one
         self.assertTrue(all(np.allclose(np.ptp(m.vertices[:, :2], axis=0), 0.297) for m in tops))
+        # Tops on the lane's 16 x 8 grid of 30 cm cells, from its south-west corner.
+        grid = {}
+        for m in tops:
+            x, y = m.vertices[:, :2].mean(axis=0)
+            cell = (round((x - LANE_ORIGINS["stepfields"] + 2.25) / 0.3), round((y + 1.05) / 0.3))
+            grid[cell] = round(float(m.vertices[:, 2].max() - DECK - OSB), 3)
+        # p. 35's cut list: 80 tops, 32 on long legs and 48 on short.
+        self.assertEqual(len(grid), 80)
+        self.assertEqual(sorted(Counter(grid.values()).items()), [(0.15, 48), (0.3, 32)])
+        # Each 60 cm base is a quad (30 cm on one diagonal, 15 cm on the other) or a single.
+        kinds = Counter()
+        for bx in range(8):
+            for by in range(4):
+                cells = [grid.get((2 * bx + a, 2 * by + b), 0.0) for a in (0, 1) for b in (0, 1)]
+                if sorted(cells) == [0.15, 0.15, 0.3, 0.3] and cells[0] == cells[3]:
+                    kinds["quad"] += 1
+                elif sorted(cells) == [0.0, 0.0, 0.0, 0.15]:
+                    kinds["single"] += 1
+                else:
+                    self.fail(f"base {bx},{by}: {cells}")
+        self.assertEqual(kinds, {"quad": 16, "single": 16})
+        for (gx, gy), height in grid.items():
+            if height != 0.3:
+                continue
+            # A lower step covers every side of a 30 cm top; only another 30 cm top, where two
+            # ridges meet, may take its place. Never the bare base.
+            for side in ((gx + 1, gy), (gx - 1, gy), (gx, gy + 1), (gx, gy - 1)):
+                if 0 <= side[0] < 16 and 0 <= side[1] < 8:
+                    self.assertIn(side, grid, (gx, gy))
+            # Ridges run diagonally.
+            self.assertTrue(any(grid.get((gx + dx, gy + dy)) == 0.3 for dx in (-1, 1) for dy in (-1, 1)))
+        # They zigzag between the railings and cross at the lane centre.
+        for cell in ((3, 7), (4, 7), (3, 0), (4, 0), (7, 3), (8, 3), (7, 4), (8, 4)):
+            self.assertEqual(grid.get(cell), 0.3, cell)
 
     def test_ramps_are_fifteen_degree_wedges_in_peaks_and_valleys(self):
         ramps = self.named("ramps", suffix="_r0") + self.named("ramps", suffix="_r1") + self.named("ramps", suffix="_r2") + self.named("ramps", suffix="_r3")
@@ -272,10 +305,10 @@ class RemainingLaneTests(unittest.TestCase):
         wide = build_lanes(Options(alley_width=0.8))[5]
         panel = next(m for m in wide.meshes if m.name == "divider0_panel")
         self.assertAlmostEqual(panel.vertices[:, 1].min() + 1.2, 0.8)
-        self.assertEqual(self.slopes["alleys"].railing_count, 15)
-        # Under slopes the far floors rise together toward the far end (a side slope for
-        # the hallways); the door-end floors stay flat.
-        floors = {f.name: f for f in self.slopes["alleys"].floors}
+        self.assertEqual(self.lanes["alleys_slopes"].railing_count, 15)
+        # In the sloped level the far floors rise together toward the far end (a side slope
+        # for the hallways); the door-end floors stay flat.
+        floors = {f.name: f for f in self.lanes["alleys_slopes"].floors}
         self.assertEqual(floors["far_north"].pitch, floors["far_south"].pitch)
         self.assertGreater(floors["far_north"].pitch, 0)
         self.assertEqual(floors["blue_end"].pitch, floors["second"].pitch)
@@ -289,8 +322,8 @@ class RemainingLaneTests(unittest.TestCase):
     def test_alleys_every_divider_line_has_its_doorway(self):
         # Regression: the first divider was sealed, its doorway landing on the standard
         # lane's end barrier. Walk along each divider line and find where it is open.
-        for lanes in (self.lanes, self.slopes):
-            lane = lanes["alleys"]
+        for key in ("alleys", "alleys_slopes"):
+            lane = self.lanes[key]
             ox = lane.origin[0]
             floor_parts = ("_osb", "_frame_long_", "_joist_", "_leg_", "_leg_brace")
             solid = [
@@ -365,7 +398,8 @@ class RemainingLaneTests(unittest.TestCase):
         tops = [max(m.vertices[:, 2].max() for m in lane.meshes if m.name.startswith(f"stack{i}_pallet")) for i in range(3)]
         np.testing.assert_allclose(tops, [7 * PALLET_TOP, 4 * PALLET_TOP, PALLET_TOP])
         self.assertEqual(len(self.named("stairs", prefix="stack", suffix="_pipes_pipe2")), 3)
-        shallow = build_lanes(Options(stair_angle=35.0, stair_debris=3))[9]
+        shallow = next(lane for lane in build_lanes(Options(stair_angle=35.0, stair_debris=3))
+                       if lane.key == "stair_debris")
         run = 0.2 / math.tan(math.radians(35.0))
         t1 = next(m for m in shallow.meshes if m.name == "tread1")
         t5 = next(m for m in shallow.meshes if m.name == "tread5")

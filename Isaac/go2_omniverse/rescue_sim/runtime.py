@@ -6,9 +6,9 @@ with velocities zeroed, puts the legs in the level's posture and the arm back at
 there, so it does not lunge back to an old target), puts the gravel and the avoid posts back, re-zeroes odometry,
 and clears the policy's action history so its next input is fresh.
 
-There are no per-level hotkeys: Isaac Sim already binds F2 (rename), F7 (hide the UI), F10 (screenshot) and F11
-(full screen), so the level window's buttons and Page Up/Down pick levels. A controller outside the sim (nav2, the behaviour tree) is not reset: it
-can send new commands straight after.
+Levels are picked from the level window's buttons (or `/sim/level`), never by key: there are too many to step
+through, and Isaac Sim already binds F2 (rename), F7 (hide the UI), F10 (screenshot) and F11 (full screen). A
+controller outside the sim (nav2, the behaviour tree) is not reset: it can send new commands straight after.
 """
 from __future__ import annotations
 
@@ -66,10 +66,6 @@ class LevelManager:
     def request_level(self, index: int) -> None:
         with self._lock:
             self.selection.select(index)
-
-    def request_cycle(self, direction: int) -> None:
-        with self._lock:
-            self.selection.cycle(direction)
 
     def request_reset(self) -> None:
         with self._lock:
@@ -238,22 +234,39 @@ class LevelManager:
             return
         import omni.ui as ui
 
-        rows = math.ceil(len(self.levels) / 2)
-        # Docked beside the Stage panel, and shown, so it covers none of the viewport.
-        self.window = ui.Window("Rescue sim", width=380, height=225 + 31 * rows, flags=ui.WINDOW_FLAGS_NO_SCROLLBAR)
+        rows = lv.rows(self.levels)
+        columns = max(len(indices) for _, indices in rows)
+        # Docked beside the Stage panel, and shown, so it covers none of the viewport. The dock there is narrow
+        # (about 260 px in a default window), so an arena with one level is one full-width button, and an arena
+        # with settings is its name over a row of setting buttons in equal columns that stretch to the width.
+        # The list scrolls when the dock is shorter than it.
+        self.window = ui.Window("Rescue sim", width=380, height=560, flags=ui.WINDOW_FLAGS_NO_SCROLLBAR)
         self.window.deferred_dock_in("Stage", ui.DockPolicy.CURRENT_WINDOW_IS_ACTIVE)
+        loaded = {"Button:selected": {"background_color": 0xFF8C5B2B}}
+
+        def button(i):
+            level = self.levels[i]
+            self._buttons[i] = ui.Button("", width=ui.Fraction(1), style=loaded,
+                                         clicked_fn=lambda i=i: self.request_level(i),
+                                         tooltip=f"{level.title}\n{level.subtitle}\n/sim/level {level.key}")
+
         with self.window.frame:
-            with ui.VStack(spacing=5, height=0):
+            with ui.VStack(spacing=5):
                 self._status = ui.Label("", word_wrap=True, height=36)
-                ui.Label("Levels", height=18)
-                self._buttons = []
-                for row in range(rows):
-                    with ui.HStack(spacing=5, height=26):
-                        for i in range(2 * row, min(2 * row + 2, len(self.levels))):
-                            self._buttons.append(ui.Button("", clicked_fn=lambda i=i: self.request_level(i),
-                                                           tooltip=self.levels[i].subtitle))
-                        if 2 * row + 1 >= len(self.levels):
-                            ui.Spacer()
+                with ui.ScrollingFrame(horizontal_scrollbar_policy=ui.ScrollBarPolicy.SCROLLBAR_ALWAYS_OFF):
+                    with ui.VStack(spacing=4, height=0):
+                        self._buttons = [None] * len(self.levels)
+                        for group, indices in rows:
+                            if len(indices) == 1:
+                                with ui.HStack(height=26):
+                                    button(indices[0])
+                                continue
+                            ui.Label(group, height=16, style={"color": 0xFFB0B0B0})
+                            with ui.HStack(spacing=5, height=26):
+                                for i in indices:
+                                    button(i)
+                                for _ in range(columns - len(indices)):
+                                    ui.Spacer(width=ui.Fraction(1))
                 with ui.HStack(spacing=5, height=28):
                     ui.Button("Reset level", clicked_fn=self.request_reset, tooltip="Home or R")
                     self._posture_button = ui.Button("", clicked_fn=self.request_posture_toggle, tooltip="L")
@@ -263,17 +276,18 @@ class LevelManager:
                     self._light_button = ui.Button("", clicked_fn=self.request_light,
                                                    tooltip="A lamp beside the wrist camera, for the maze under its "
                                                            "tarp")
-                ui.Label("Levels: Page Up / Page Down    Drive: W A S D Q E", height=18,
-                         style={"color": 0xFF909090})
-                ui.Label("Lidar points: T    Click the viewport before using keys", height=18,
-                         style={"color": 0xFF909090})
+                ui.Label("Drive: W A S D Q E    Lidar points: T", height=18, style={"color": 0xFF909090})
+                ui.Label("Click the viewport before using keys", height=18, style={"color": 0xFF909090})
         self._refresh_ui()
 
     def _refresh_ui(self) -> None:
         if not self._buttons:
             return
+        alone = {indices[0] for _, indices in lv.rows(self.levels) if len(indices) == 1}
         for i, (button, level) in enumerate(zip(self._buttons, self.levels)):
-            button.text = f"> {level.title}" if i == self.selection.current else level.title
+            loaded = i == self.selection.current
+            button.text = ("> " if loaded else "") + (level.title if i in alone else level.label)
+            button.selected = loaded
         self._posture_button.enabled = not self.level.posture_fixed
         if self.level.posture_fixed:
             self._posture_button.text = "Lying down" if self.level.posture == lv.LYING else "Standing"
@@ -290,9 +304,7 @@ class LevelManager:
             if name in ("W", "S", "A", "D", "Q", "E"):
                 base_command["0"] = [0.0, 0.0, 0.0]
             return name in ("W", "S", "A", "D", "Q", "E")
-        if name in ("PAGE_UP", "PAGE_DOWN"):
-            self.request_cycle(-1 if name == "PAGE_UP" else 1)
-        elif name in ("HOME", "R"):
+        if name in ("HOME", "R"):
             self.request_reset()
         elif name == "L":
             self.request_posture_toggle()

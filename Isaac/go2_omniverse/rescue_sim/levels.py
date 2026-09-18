@@ -3,7 +3,8 @@
 Everything is built into one stage at startup and a level is a place in it, so loading one is a teleport: the
 robot, the arm and (for the cup demo) the cup are put back at the level's start, and nothing is rebuilt. The
 competition lanes come from `competition/` (geometry and fabrication details in its README); adding a lane there
-adds a level here.
+adds a level here. The level window gives each arena a row, with a button for each of its settings (flat, sloped,
+additional obstacles; clear or debris stairs).
 
 **The cup demo** is D1Training's pick scene (`demos/cup/pick_demo/scene.py`, commit 5e19028): the Go2 lying down,
 a 55 x 100 mm mug 42 cm ahead of it and 3 cm to its left, handle pointing away. Lying is Unitree's lie-down target
@@ -64,6 +65,8 @@ class Level:
     subtitle: str = ""
     # The robot keeps `posture` for as long as the level is loaded: lying down and standing up are refused.
     posture_fixed: bool = False
+    group: str = ""     # the level window's row: the arena
+    label: str = ""     # its button in that row: the setting, or "" when the arena has one level
 
     @property
     def yaw_deg(self) -> float:
@@ -74,7 +77,7 @@ class Level:
 def competition_levels(lanes) -> list[Level]:
     """One level per competition lane, starting on the lane's entry pad."""
     return [Level(lane.key, lane.title, tuple(lane.spawn), tuple(lane.spawn_rotation), STANDING,
-                  getattr(lane, "subtitle", "")) for lane in lanes]
+                  getattr(lane, "subtitle", ""), group=lane.arena, label=lane.setting) for lane in lanes]
 
 
 CUP_DEMO = Level(
@@ -83,11 +86,22 @@ CUP_DEMO = Level(
     yaw_quat_wxyz(CUP_DEMO_YAW_DEG), LYING,
     "D1Training's pick scene: the Go2 lying, a 55 x 100 mm mug 42 cm ahead",
     posture_fixed=True,
+    group="Cup demo",
 )
 
 
 def catalogue(lanes) -> list[Level]:
     return competition_levels(lanes) + [CUP_DEMO]
+
+
+def rows(levels) -> list[tuple[str, list[int]]]:
+    """The level window's rows: each group once, where it first appears in `levels`, with the indices of its
+    levels in catalogue order. The standard lanes' sloped and obstacle copies sit at the far end of the hall but
+    share their arena's row."""
+    out: dict[str, list[int]] = {}
+    for index, level in enumerate(levels):
+        out.setdefault(level.group or level.title, []).append(index)
+    return list(out.items())
 
 
 def base_to_world(level: Level, xy_b, yaw_b_deg: float = 0.0) -> tuple[float, float, float]:
@@ -127,7 +141,7 @@ def leg_pose(joint_names, pose: dict) -> dict[int, float]:
 
 @dataclass
 class Selection:
-    """A queued level change: UI and keyboard callbacks never write physics tensors, the loop does."""
+    """A queued level change: UI, ROS and keyboard callbacks never write physics tensors, the loop does."""
 
     count: int
     current: int = 0
@@ -137,10 +151,6 @@ class Selection:
         if not 0 <= index < self.count:
             raise IndexError(index)
         self.pending = index
-
-    def cycle(self, direction):
-        start = self.current if self.pending is None else self.pending
-        self.pending = (start + direction) % self.count
 
     def consume(self):
         if self.pending is not None:

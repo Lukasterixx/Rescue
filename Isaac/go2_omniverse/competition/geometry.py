@@ -27,6 +27,7 @@ COLORS = {
     "blue": (0.025, 0.32, 0.72),
     "green": (0.03, 0.55, 0.25),
     "metal": (0.30, 0.32, 0.34),
+    "handle_metal": (0.63, 0.62, 0.58),  # satin nickel door furniture
     "pvc": (0.92, 0.92, 0.90),
     "yellow": (0.93, 0.80, 0.12),   # stepfield 15 cm plateaus, door square steps
     "orange": (0.90, 0.45, 0.10),   # stepfield 30 cm plateaus, door half steps
@@ -34,6 +35,16 @@ COLORS = {
     "door": (0.42, 0.42, 0.45),     # the purchased door leaf
     "tarp": (0.03, 0.03, 0.03),     # blackout tarp over the maze
     "post": (0.08, 0.08, 0.08),     # avoid-lane posts, black in the guide's render
+    "slip_disk": (0.90, 0.45, 0.10),  # ramp slip disks, orange in the guide's render (p. 37)
+    "slip_seat": (0.65, 0.48, 0.27),  # the OSB under a slip disk, with the disk's friction
+}
+# Friction (static, dynamic, combine mode) where it is not the scene's 0.85 / 0.65 averaged.
+# A slip disk turns on its seat as long as the seat's friction is less than the foot's on the
+# disk, so the seat's pair is its own value ("min"), whatever it touches. 0.30 / 0.25 is an
+# assumed thin wood or plastic disk on OSB, not a measurement (p. 40 allows either).
+FRICTION = {
+    "gravel": (0.70, 0.55, None),
+    "slip_seat": (0.30, 0.25, "min"),
 }
 # Visual/colour acuity targets, printed p. 72: ring colour and the gap directions of the
 # three nested Landolt Cs (degrees, counter-clockwise from the viewer's right). Set 1 is the
@@ -63,17 +74,19 @@ class Options:
     alley_width: float = 0.45     # Center in Alleys doorway: robot width + 10 cm, p. 43
     door_floor: str = "flat"      # Doors: flat | square (yellow steps out) | half (orange out too), p. 57
     stair_angle: float = 45.0     # Stairs: 35–45 degrees, p. 52
-    stair_debris: int = 0         # Stairs: 0–3 hinged debris rails, p. 51
+    stair_debris: int = 3         # Stairs: 0–3 fixed poses of hinged debris rails, p. 51
+    layered_k_rail_height: float = 0.20  # K-Rails' Additional Obstacles: layers stacked in 5 cm steps, p. 30
 
     def __post_init__(self):
         if self.difficulty not in ("flat", "slopes"):
             raise ValueError("difficulty must be flat or slopes")
         if self.gravel not in ("dynamic", "static"):
             raise ValueError("gravel must be dynamic or static")
-        if not 0.1 <= self.k_rail_height <= 0.4 or not math.isclose(
-            self.k_rail_height / 0.05, round(self.k_rail_height / 0.05), abs_tol=1e-7
-        ):
-            raise ValueError("K-Rails must be 0.10–0.40 m tall, in 0.05 m increments")
+        for height in (self.k_rail_height, self.layered_k_rail_height):
+            if not 0.1 <= height <= 0.4 or not math.isclose(
+                height / 0.05, round(height / 0.05), abs_tol=1e-7
+            ):
+                raise ValueError("K-Rails must be 0.10–0.40 m tall, in 0.05 m increments")
         if not 0.3 <= self.alley_width <= 1.2:
             raise ValueError("alley_width must be 0.3–1.2 m")
         if self.door_floor not in ("flat", "square", "half"):
@@ -95,19 +108,25 @@ class Mesh:
     uv: np.ndarray | None = None  # per-vertex texture coordinates; None = planar projection
     dynamic: bool = False  # its own rigid body: exported about its centroid with a translate op
     mass: float = 0.0
+    contact_offset: float | None = None  # PhysX contact offset for thin bodies; None keeps the default
+    material_faces: dict[str, np.ndarray] = field(default_factory=dict)  # visual material overrides by face index
 
 
 @dataclass(frozen=True)
 class Joint:
-    """A revolute joint between two of a lane's meshes, authored into the USD."""
+    """A joint between two of a lane's meshes, authored into the USD: a hinge about `axis`
+    through `pivot`, or with `lift` a loose bolt, which also lets body1 slide up to `lift`
+    either way along the axis, so the body rests on its seat rather than on the joint."""
 
     name: str
     body0: str  # a static mesh, or "" for the world
     body1: str  # a dynamic mesh
-    pivot: tuple[float, float, float]  # world point on the vertical hinge axis
-    limits: tuple[float, float] = (0.0, 90.0)  # degrees
+    pivot: tuple[float, float, float]  # world point on the hinge axis
+    limits: tuple[float, float] | None = (0.0, 90.0)  # degrees; None turns freely
     stiffness: float = 0.0  # angular drive back to 0 degrees, N m / rad
     damping: float = 0.0  # N m s / rad
+    axis: tuple[float, float, float] = (0.0, 0.0, 1.0)  # world direction of the hinge axis
+    lift: float | None = None  # metres of play along the axis; None is a plain hinge
 
 
 @dataclass(frozen=True)
@@ -149,6 +168,13 @@ class Lane:
     spawn_rotation: tuple[float, float, float, float] = (math.sqrt(0.5), 0.0, 0.0, -math.sqrt(0.5))
     subtitle: str = "4.8 m × 2.4 m nominal lane · 5 cm end-zone offsets"
     joints: list[Joint] = field(default_factory=list)
+    # The level window's row and button: the arena, and which of its settings this lane is
+    # (FLAT, SLOPES, OBSTACLES, or the stairs' Clear/Debris). Empty for arenas with one level.
+    arena: str = ""
+    setting: str = ""
+
+    def __post_init__(self):
+        self.arena = self.arena or self.title
 
     def dynamic_meshes(self):
         return [m for m in self.meshes if m.dynamic]
@@ -444,7 +470,7 @@ def gravel_lane(lane, options):
                     )
 
 
-def k_rail_cell(lane, floor, cell, center, rising, options):
+def k_rail_cell(lane, floor, cell, center, rising, k_rail_height):
     """One 1.2 m square OSB backing with its stacked diagonal (pp. 31–32)."""
     x, y = center
     add(
@@ -459,7 +485,7 @@ def k_rail_cell(lane, floor, cell, center, rising, options):
         floor,
     )
     # A 10 cm base, then 5 cm lifts; preserve the visible layer seams.
-    bottom, remaining, layer = OSB, options.k_rail_height, 0
+    bottom, remaining, layer = OSB, k_rail_height, 0
     while remaining > 1e-7:
         height = min(0.1 if layer == 0 else 0.05, remaining)
         add(
@@ -480,6 +506,12 @@ def k_rail_cell(lane, floor, cell, center, rising, options):
 
 
 def k_rail_lane(lane, options):
+    """Eight backed diagonals (p. 31). Under Additional Obstacles they are stacked to
+    `layered_k_rail_height` ("stack high enough to challenge the maximum capability of the
+    robot", p. 30); otherwise they are `k_rail_height`."""
+    height = options.layered_k_rail_height if lane.setting == OBSTACLES else options.k_rail_height
+    if lane.setting == OBSTACLES:
+        lane.subtitle += f" · {height * 100:g} cm layered K-Rails"
     for floor in lane.floors:
         for cell in range(2):
             if floor.name in ("blue_end", "green_end"):
@@ -488,7 +520,7 @@ def k_rail_lane(lane, options):
             else:
                 center = (-0.6 + cell * 1.2, 0.0)
                 rising = (cell == 0) == (floor.name == "lower")
-            k_rail_cell(lane, floor, cell, center, rising, options)
+            k_rail_cell(lane, floor, cell, center, rising, height)
 
 
 # --- Linear Align/Inspect tasks (pp. 69–72) and the practice square ---------------------
@@ -801,6 +833,55 @@ def linear_inspect_task(lane, floor, center, facing, name, targets):
         )
 
 
+# --- Pinch points (printed pp. 86–87) -----------------------------------------------------
+PINCH_PANEL = 0.60  # two 60 x 60 cm thin OSB panels, p. 87
+PINCH_TOP = RAILING_HEIGHT + 0.05  # the hanging blocks lie on the top rail, flush with the panels
+PINCH_DEPTH = PINCH_PANEL / math.sqrt(2)  # how far the apex juts from the railing, 42 cm
+
+
+def _plank(name, start, end, width, bottom, top, material="wood"):
+    """A vertical board of `width` along the plan segment start -> end."""
+    a, b = np.asarray(start, dtype=float), np.asarray(end, dtype=float)
+    d = (b - a) / np.linalg.norm(b - a)
+    n = np.array([-d[1], d[0]]) * width / 2
+    return prism(name, [a - n, b - n, b + n, a + n], bottom, top, material)
+
+
+def pinch_point(lane, floor, center, facing, name):
+    """Pinch point, p. 87, hung on a railing: two 60 x 60 cm thin OSB panels joined at a
+    right angle on a 60 cm 2x2 spine, so that with the railing they make a triangle jutting
+    42 cm into the lane (p. 86). Each free end carries a 15 cm 2x4 hanging block lying across
+    the top rail, and a 15 cm 2x2 post dropping behind it. The panels' tops are flush with
+    the blocks, so they span 35–95 cm above the floor: the robot's body has to steer round
+    them. Red, as the guide's renders show them. `center` is the mount point on the railing
+    line in floor coordinates, `facing` the unit direction into the lane. The robot never
+    touches them in the height scan, like the railings they hang on."""
+    fx, fy = facing
+    forward = np.array([fx, fy, 0.0])
+    along = np.array([fy, -fx, 0.0])  # right-handed with forward and up
+    up = np.array([0.0, 0.0, 1.0])
+    base = np.array([center[0], center[1], 0.0])
+
+    def place(mesh):
+        v = mesh.vertices
+        mesh.vertices = base + v[:, :1] * along + v[:, 1:2] * forward + v[:, 2:3] * up
+        add(lane, mesh, floor)
+
+    wall = 0.03  # 5 mm clear of the railing's inner face (its members are 5 cm thick)
+    bottom = PINCH_TOP - PINCH_PANEL
+    apex = (0.0, wall + PINCH_DEPTH)
+    for side in (-1, 1):
+        end = (side * PINCH_DEPTH, wall)
+        place(_plank(f"{name}_panel{(side + 1) // 2}", end, apex, OSB, bottom, PINCH_TOP, "red"))
+        k = (side + 1) // 2
+        place(box(f"{name}_block{k}", (end[0], -0.025, PINCH_TOP - 0.025), (0.10, 0.15, 0.05)))
+        place(box(f"{name}_post{k}", (end[0], -0.06, PINCH_TOP - 0.075), (0.05, 0.05, 0.15)))
+    # The spine sits in the inside corner of the V, a 5 cm square turned to fit it.
+    h = 0.025 * math.sqrt(2)
+    y = apex[1] - OSB / math.sqrt(2) - h
+    place(prism(f"{name}_spine", [(h, y), (0.0, y + h), (-h, y), (0.0, y - h)], bottom, PINCH_TOP))
+
+
 def square_lane(options, origin):
     """The 2.4 m practice square: the K-Rails lane's central four panels, fenced along the
     north and south edges and along the north half of the east edge and the south half of
@@ -824,7 +905,7 @@ def square_lane(options, origin):
         build_floor(lane, floor)
         for cell in range(2):
             # Same pattern as the lane's centre floors: the four diagonals make one X.
-            k_rail_cell(lane, floor, cell, (-0.6 + cell * 1.2, 0.0), (cell == 0) == (floor is south), options)
+            k_rail_cell(lane, floor, cell, (-0.6 + cell * 1.2, 0.0), (cell == 0) == (floor is south), options.k_rail_height)
     for floor, y in ((south, -0.6), (north, 0.6)):
         for i in range(2):
             railing(lane, floor, (-1.2 + i * 1.2, y), (i * 1.2, y), f"{floor.name}_outer_{i}")
@@ -843,11 +924,30 @@ def square_lane(options, origin):
     return lane
 
 
-def standard_lane(key, title, origin, options, surface_extra, terrain):
-    """The guide's 4.8 x 2.4 m lane (p. 6): two end floors, two centre floors that tilt under
-    `slopes`, 14 railings, then `terrain(lane, options)` on top, and the simulation's entry
-    pad level with the lane's walking surface (DECK + `surface_extra`)."""
-    angle = math.radians(15) if options.difficulty == "slopes" else 0.0
+# A standard lane's three difficulty settings (p. 5): the button each gets in the sim's
+# level window, and the name its title carries.
+FLAT, SLOPES, OBSTACLES = "Flat", "Slopes 15°", "Obstacles"
+SETTING_NAMES = {SLOPES: "Opposing Slopes 15°", OBSTACLES: "Additional Obstacles"}
+# Where p. 5's Additional Obstacles render hangs the pinch points, on alternate walls as p. 86
+# suggests for a serpentine: the blue end's west wall inside the gate, the upper floor's north
+# wall at its west half, the lower floor's south wall at its east half and the green end's
+# north wall. (floor, centre on the railing line in floor coordinates, facing into the lane)
+PINCH_POINTS = (
+    ("blue_end", (-0.6, 0.6), (1.0, 0.0)),
+    ("upper", (-0.6, 0.6), (0.0, -1.0)),
+    ("lower", (0.6, -0.6), (0.0, 1.0)),
+    ("green_end", (0.0, 1.2), (0.0, -1.0)),
+)
+
+
+def standard_lane(key, arena, origin, options, surface_extra, terrain, setting=FLAT):
+    """The guide's 4.8 x 2.4 m lane (p. 6): two end floors, two centre floors, 14 railings,
+    then `terrain(lane, options)` on top, and the simulation's entry pad level with the lane's
+    walking surface (DECK + `surface_extra`). `setting` is the column of the guide's lane
+    difficulty pages (pp. 5, 27, 30, 34, 37): FLAT; SLOPES, which tilts the two centre floors
+    15 degrees in opposite directions; or OBSTACLES, the same slopes with four pinch points
+    and whatever extra the terrain adds for it (layered K-Rails, rotating slip disks)."""
+    angle = math.radians(15) if setting in (SLOPES, OBSTACLES) else 0.0
     floors = [
         Floor("blue_end", (-1.8, 0.05), (1.2, 2.4)),
         Floor("lower", (0.0, -0.6), (2.4, 1.2), angle),
@@ -857,9 +957,17 @@ def standard_lane(key, title, origin, options, surface_extra, terrain):
     surface = DECK + surface_extra
     # Simulation entry pad, outside the guide's footprint and open gate.
     spawn = (origin[0] - 1.8, 1.85, surface + 0.42)
-    lane = Lane(key, title, origin, floors, spawn)
+    title = f"{arena} · {SETTING_NAMES[setting]}" if setting in SETTING_NAMES else arena
+    lane = Lane(key, title, origin, floors, spawn, arena=arena, setting=setting)
+    if angle:
+        lane.subtitle = "4.8 m × 2.4 m lane · centre floors 15° in opposite directions"
     build_structure(lane)
     terrain(lane, options)
+    if setting == OBSTACLES:
+        named = {floor.name: floor for floor in floors}
+        for k, (floor, center, facing) in enumerate(PINCH_POINTS):
+            pinch_point(lane, named[floor], center, facing, f"pinch{k}")
+        lane.subtitle += " · four pinch points"
     add(
         lane,
         box("entry_pad", (-1.8, 1.85, surface / 2), (1.2, 1.2, surface), "blue", scan=True),
@@ -874,8 +982,10 @@ def standard_lane(key, title, origin, options, surface_extra, terrain):
     return lane
 
 
-# Lane catalogue: key, title, origin x. Standard lanes sit 7 m apart; the stairs and the
-# maze are longer and get more room. Adding a lane here extends F-key/PageDown selection.
+# Lane catalogue: key, origin x. Standard lanes sit 7 m apart; the stairs and the maze are
+# longer and get more room. The sloped and Additional Obstacles copies of the standard lanes
+# follow the maze, so the lanes before them keep their places. Adding a lane here adds a
+# level to the sim, in the row of its arena.
 LANE_ORIGINS = {
     "gravel": 0.0,
     "krails": 1 * LANE_SPACING,
@@ -887,7 +997,15 @@ LANE_ORIGINS = {
     "doors": 7 * LANE_SPACING,
     "avoid": 8 * LANE_SPACING,
     "stairs": 9 * LANE_SPACING + 2.0,
-    "maze": 9 * LANE_SPACING + 17.0,
+    "stair_debris": 9 * LANE_SPACING + 10.0,
+    "maze": 9 * LANE_SPACING + 25.0,
+    "krails_slopes": 14 * LANE_SPACING + 2.0,
+    "krails_obstacles": 15 * LANE_SPACING + 2.0,
+    "stepfields_slopes": 16 * LANE_SPACING + 2.0,
+    "stepfields_obstacles": 17 * LANE_SPACING + 2.0,
+    "ramps_slopes": 18 * LANE_SPACING + 2.0,
+    "ramps_obstacles": 19 * LANE_SPACING + 2.0,
+    "alleys_slopes": 20 * LANE_SPACING + 2.0,
 }
 
 
@@ -897,18 +1015,29 @@ def build_lanes(options=Options()):
     def origin(key):
         return (LANE_ORIGINS[key], 0.0, 0.0)
 
+    # Gravel and pallets have no sloped level of their own, so --difficulty tilts them.
+    tilted = SLOPES if options.difficulty == "slopes" else FLAT
+    krails, stepfields, ramps = "Diagonal K-Rails", "Half-Cubic Stepfields", "Pitch/Roll Ramps"
     return [
-        standard_lane("gravel", "Shifty Gravel", origin("gravel"), options, GRAVEL_DEPTH, gravel_lane),
-        standard_lane("krails", "Diagonal K-Rails", origin("krails"), options, OSB, k_rail_lane),
+        standard_lane("gravel", "Shifty Gravel", origin("gravel"), options, GRAVEL_DEPTH, gravel_lane, tilted),
+        standard_lane("krails", krails, origin("krails"), options, OSB, k_rail_lane),
         square_lane(options, origin("square")),
-        standard_lane("stepfields", "Half-Cubic Stepfields", origin("stepfields"), options, OSB, terrains.stepfield_lane),
-        standard_lane("ramps", "Pitch/Roll Ramps", origin("ramps"), options, OSB, terrains.ramp_lane),
+        standard_lane("stepfields", stepfields, origin("stepfields"), options, OSB, terrains.stepfield_lane),
+        standard_lane("ramps", ramps, origin("ramps"), options, OSB, terrains.ramp_lane),
         terrains.alleys_lane(options, origin("alleys")),
-        standard_lane("pallets", "Pallets & Pipes", origin("pallets"), options, PALLET_TOP, terrains.pallet_lane),
+        standard_lane("pallets", "Pallets & Pipes", origin("pallets"), options, PALLET_TOP, terrains.pallet_lane, tilted),
         structures.door_lane(options, origin("doors")),
         structures.avoid_lane(options, origin("avoid")),
         structures.stair_lane(options, origin("stairs")),
+        structures.stair_lane(options, origin("stair_debris"), debris=True),
         maze.maze_lane(options, origin("maze")),
+        standard_lane("krails_slopes", krails, origin("krails_slopes"), options, OSB, k_rail_lane, SLOPES),
+        standard_lane("krails_obstacles", krails, origin("krails_obstacles"), options, OSB, k_rail_lane, OBSTACLES),
+        standard_lane("stepfields_slopes", stepfields, origin("stepfields_slopes"), options, OSB, terrains.stepfield_lane, SLOPES),
+        standard_lane("stepfields_obstacles", stepfields, origin("stepfields_obstacles"), options, OSB, terrains.stepfield_lane, OBSTACLES),
+        standard_lane("ramps_slopes", ramps, origin("ramps_slopes"), options, OSB, terrains.ramp_lane, SLOPES),
+        standard_lane("ramps_obstacles", ramps, origin("ramps_obstacles"), options, OSB, terrains.ramp_lane, OBSTACLES),
+        terrains.alleys_lane(options, origin("alleys_slopes"), SLOPES),
     ]
 
 

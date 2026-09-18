@@ -1,8 +1,8 @@
 """Loose rigid bodies in the competition scene, put back where they were exported.
 
-The gravel stones (when dynamic) and the avoid lane's posts are free bodies. A level load in the rescue sim
-(`rescue_sim/runtime.py`) resets them through these. The door leaf is loose too, but its sprung hinge closes it by
-itself.
+The gravel stones (when dynamic), the avoid lane's posts and the ramps' slip disks are free bodies. A level load in
+the rescue sim (`rescue_sim/runtime.py`) resets them through these, which turns every disk's marker line back to
+where it started. The door leaf is loose too, but its sprung hinge closes it by itself.
 """
 
 from __future__ import annotations
@@ -75,20 +75,27 @@ class GravelReset(LooseReset):
         return [self.stones[i] for i in self.order]
 
 
+# Families of loose bodies within a lane, by name: exported world-aligned about their centroids,
+# numbered by their names' trailing integers.
+LOOSE_FAMILIES = {"post_": "posts", "slip_disk_": "disks"}
+
+
 def loose_resets(lanes, options):
-    """One reset per family of loose bodies: the gravel (when dynamic) and the avoid posts.
-    The door leaf is loose too but its sprung hinge closes it by itself."""
+    """One reset per family of loose bodies: the gravel (when dynamic), the avoid posts and
+    each lane's slip disks. The door leaf is loose too but its sprung hinge closes it by
+    itself."""
     resets = []
     if options.gravel == "dynamic":
         resets.append(GravelReset(lanes))
     for lane in lanes:
-        posts = [m for m in lane.dynamic_meshes() if m.name.startswith("post_")]
-        if posts:
-            resets.append(
-                LooseReset(
-                    f"{TERRAIN_PATH}/Structure/{lane.key}/post_.*",
-                    [(tuple(m.vertices.mean(axis=0)), (1.0, 0.0, 0.0, 0.0)) for m in posts],
-                    f"competition_{lane.key}_posts",
+        for prefix, family in LOOSE_FAMILIES.items():
+            bodies = [m for m in lane.dynamic_meshes() if m.name.startswith(prefix)]
+            if bodies:
+                resets.append(
+                    LooseReset(
+                        f"{TERRAIN_PATH}/Structure/{lane.key}/{prefix}.*",
+                        [(tuple(m.vertices.mean(axis=0)), (1.0, 0.0, 0.0, 0.0)) for m in bodies],
+                        f"competition_{lane.key}_{family}",
+                    )
                 )
-            )
     return resets

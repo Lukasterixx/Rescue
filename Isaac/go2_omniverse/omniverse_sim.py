@@ -10,6 +10,8 @@ import time
 import os
 import threading
 
+import arena_layout
+
 # add argparse arguments
 # Unitree's published D1-550 figure (3152 g).
 # https://support.unitree.com/home/en/developer/D1Arm_services
@@ -20,7 +22,15 @@ parser.add_argument("--disable_fabric", action="store_true", default=False, help
 parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default="Isaac-Velocity-Rough-Unitree-Go2-v0", help="Name of the task.")
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
-parser.add_argument("--custom_env", type=str, default="office", help="Setup the environment")
+parser.add_argument("--custom_env", type=str, default="arena",
+                    help="World to build. 'arena' (default): the 2.4 m obstacle course from the design "
+                         "drawing (arena_layout.py), with the robot spawned outside it. 'maze': the "
+                         "procedural maze. Anything else additionally loads the static warehouse USD.")
+parser.add_argument("--arena_start", type=str, default=arena_layout.DEFAULT_START,
+                    choices=sorted(arena_layout.START_POSES),
+                    help="Which START|END box of the arena drawing the robot spawns in: 'sw' (default) "
+                         "is the bottom-left one, facing north; 'ne' the top-right one, facing south. "
+                         "Arena only.")
 parser.add_argument("--robot", type=str, default="go2", help="Setup the robot")
 parser.add_argument("--terrain", type=str, default="rough", help="Setup the robot")
 parser.add_argument("--robot_amount", type=int, default=1, help="Setup the robot amount")
@@ -133,11 +143,13 @@ _ROS_NODE_REF = None
 # ===================== Manual Reset State =====================
 RESET_REQUESTED = False
 
-# Robot spawn pose in maze.
+# Robot spawn pose. The captured tensors are what a reset restores; the START_* pair is the
+# fallback if they were never captured, and is overwritten in run_sim() with the env config's
+# init_state (the arena start box or the maze safe zone, see custom_rl_env.py).
 ROBOT_RESET_ROOT_POSE = None
 ROBOT_RESET_JOINT_POS = None
 ARM_RESET_JOINT_POS = None
-ROBOT_START_POS = [6.2, 6.2, 0.42]
+ROBOT_START_POS = [0.0, 0.0, 0.42]
 ROBOT_START_ROT = [1.0, 0.0, 0.0, 0.0]
 
 # Orientation of the D1's Link6 frame when the arm is at its zero pose: a 90 deg
@@ -1038,9 +1050,9 @@ def sub_keyboard_event(event, *args, **kwargs) -> bool:
 # ===================== Your existing helpers =====================
 def setup_custom_env():
 
-    # --- NEW: Skip default USDs if we are using the procedural maze ---
-    if args_cli.custom_env == "maze":
-        print("[Environment] Skipping static USD load for procedural maze.")
+    # The arena and the maze are procedural terrain (custom_rl_env.py); nothing static to load.
+    if args_cli.custom_env in ("arena", "maze"):
+        print(f"[Environment] Skipping static USD load for procedural {args_cli.custom_env}.")
         return
     # ------------------------------------------------------------------
     print(f"[DEBUG] >>> Entering setup_custom_env()")
@@ -1240,6 +1252,7 @@ def run_sim():
     global _ROS_NODE_REF
     global RESET_REQUESTED
     global ARM_TELEOP_POS, ARM_TELEOP_ROT, ARM_TELEOP_YAW, ARM_RESUME_REQUESTED
+    global ROBOT_START_POS, ROBOT_START_ROT
     # subscribe to keyboard
     if omni.appwindow is not None:
         _input = carb.input.acquire_input_interface()
@@ -1256,6 +1269,8 @@ def run_sim():
     if args_cli.robot == "g1":
         env_cfg = G1RoughEnvCfg()
     env_cfg.scene.num_envs = args_cli.robot_amount
+    ROBOT_START_POS = list(env_cfg.scene.robot.init_state.pos)
+    ROBOT_START_ROT = list(env_cfg.scene.robot.init_state.rot)
 
     # --- Unitree D1 arm ---
     if WELDED:
@@ -1357,7 +1372,7 @@ def run_sim():
     env.unwrapped.sim.reset()
 
     # The reset above is needed for native Isaac sensor graphs, but it also
-    # runs the env reset event. Restore the maze start pose captured earlier.
+    # runs the env reset event. Restore the start pose captured earlier.
     robot.write_root_pose_to_sim(ROBOT_RESET_ROOT_POSE.clone())
     robot.write_root_velocity_to_sim(torch.zeros_like(robot.data.root_state_w[:, 7:13]))
     robot.write_joint_state_to_sim(

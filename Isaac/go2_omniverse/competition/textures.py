@@ -1,4 +1,4 @@
-"""Deterministic procedural lumber/OSB and acuity-target textures; no downloads."""
+"""Deterministic procedural lumber/OSB, slip-disk and acuity-target textures; no downloads."""
 
 from pathlib import Path
 
@@ -32,10 +32,23 @@ def write_textures(directory: Path):
             shade = rng.uniform(0.70, 1.25)
             draw.polygon(polygon, fill=tuple(int(min(255, c * shade)) for c in base))
         picture.save(directory / f"{name}.png")
-    from .geometry import ACUITY_TARGETS
+    from .geometry import ACUITY_TARGETS, COLORS
 
     for name, (color, gaps) in ACUITY_TARGETS.items():
         acuity_target(directory / f"target_{name}.png", color, name, gaps)
+    slip_disk(directory / "slip_disk.png", COLORS["slip_disk"])
+
+
+def slip_disk(path, color, size=256):
+    """A slip disk's face, spanning the texture: the disk's colour with the thick marker line
+    from the centre to the rim that shows it has turned (p. 40)."""
+    from PIL import Image, ImageDraw
+
+    image = Image.new("RGB", (size, size), tuple(int(round(v * 255)) for v in color))
+    draw = ImageDraw.Draw(image)
+    c = size / 2
+    draw.rectangle((c, c - 5, size - 1, c + 5), fill=(15, 15, 15))
+    image.save(path)
 
 
 def acuity_target(path, color, label, gaps, size=256):

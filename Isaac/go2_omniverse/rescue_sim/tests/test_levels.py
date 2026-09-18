@@ -36,6 +36,33 @@ class CatalogueTests(unittest.TestCase):
         for point in (np.array(lv.CUP_DEMO.spawn[:2]), np.array(cup[:2])):
             self.assertGreater(np.min(np.linalg.norm(structure[:, :2] - point, axis=1)), 1.0)
 
+    def test_clear_and_debris_stairs_have_separate_selectable_levels(self):
+        levels = {level.key: level for level in self.levels}
+        clear, debris = levels["stairs"], levels["stair_debris"]
+        self.assertNotEqual(clear.title, debris.title)
+        self.assertGreater(debris.spawn[0] - clear.spawn[0], 7.0)
+        np.testing.assert_allclose(clear.spawn[1:], debris.spawn[1:])
+
+    def test_the_window_gives_each_arena_one_row_of_settings(self):
+        rows = lv.rows(self.levels)
+        by_group = {group: [self.levels[i] for i in indices] for group, indices in rows}
+        self.assertEqual(len(rows), len(by_group))
+        self.assertEqual(sorted(i for _, indices in rows for i in indices), list(range(len(self.levels))))
+        # Arenas in hall order, the copies at the far end of the hall in their arena's row.
+        self.assertEqual([group for group, _ in rows], [
+            "Shifty Gravel", "Diagonal K-Rails", "K-Rail Square", "Half-Cubic Stepfields", "Pitch/Roll Ramps",
+            "Center in Alleys", "Pallets & Pipes", "Push/Pull Doors", "Avoid Holes/Posts", "Stairs | Pallet Climb",
+            "Search & Map Maze", "Cup demo"])
+        for group in ("Diagonal K-Rails", "Half-Cubic Stepfields", "Pitch/Roll Ramps"):
+            self.assertEqual([level.label for level in by_group[group]], ["Flat", "Slopes 15°", "Obstacles"])
+        self.assertEqual([level.key for level in by_group["Pitch/Roll Ramps"]],
+                         ["ramps", "ramps_slopes", "ramps_obstacles"])
+        self.assertEqual([level.label for level in by_group["Center in Alleys"]], ["Flat", "Slopes 15°"])
+        self.assertEqual([level.label for level in by_group["Stairs | Pallet Climb"]], ["Clear", "Debris"])
+        # An arena with one level gets a single button with no setting on it.
+        self.assertEqual([level.label for level in by_group["Search & Map Maze"]], [""])
+        self.assertEqual(by_group["Cup demo"], [lv.CUP_DEMO])
+
     def test_the_cup_is_where_d1training_puts_it_relative_to_the_robot(self):
         x, y, z, *quat = lv.cup_pose(lv.CUP_DEMO)
         yaw = math.radians(lv.CUP_DEMO.yaw_deg)
@@ -71,13 +98,13 @@ class CatalogueTests(unittest.TestCase):
 
 
 class SelectionTests(unittest.TestCase):
-    def test_requests_queue_and_wrap(self):
+    def test_requests_queue_until_the_loop_takes_them(self):
         selection = lv.Selection(4)
-        selection.cycle(-1)
-        self.assertEqual(selection.consume(), 3)
-        selection.cycle(1)
-        selection.cycle(1)
+        self.assertEqual(selection.consume(), 0)
+        selection.select(3)
+        selection.select(1)
         self.assertEqual(selection.consume(), 1)
+        self.assertIsNone(selection.pending)
         self.assertEqual(selection.consume(), 1)
         with self.assertRaises(IndexError):
             selection.select(4)

@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .geometry import COLORS, Mesh, Options, build_lanes, combine, ground_mesh, stone_shape
+from .geometry import COLORS, FRICTION, Mesh, Options, build_lanes, combine, ground_mesh, stone_shape
 
 ROOT = "/Competition"
 TERRAIN_PATH = "/World/competition/terrain"
@@ -37,6 +37,28 @@ def _mesh(stage, path, data):
     return mesh
 
 
+def _physx_api(prim, schema):
+    """Apply a PhysX API schema by name: plain usd-core has no PhysxSchema module (and so
+    leaves it out of GetAppliedSchemas), but Isaac's USD reads it and its attributes."""
+    prim.AddAppliedSchema(schema)
+
+
+def _z_to(axis):
+    """The Gf.Quatf turning +z onto `axis`, or None when they already agree."""
+    from pxr import Gf
+
+    a = np.asarray(axis, dtype=float)
+    a /= np.linalg.norm(a)
+    if np.allclose(a, (0.0, 0.0, 1.0)):
+        return None
+    turn = np.cross((0.0, 0.0, 1.0), a)
+    if np.linalg.norm(turn) < 1e-9:  # straight down: half a turn about x
+        return Gf.Quatf(0.0, Gf.Vec3f(1.0, 0.0, 0.0))
+    turn /= np.linalg.norm(turn)
+    angle = math.acos(float(np.clip(a[2], -1.0, 1.0)))
+    return Gf.Quatf(math.cos(angle / 2), Gf.Vec3f(*map(float, turn * math.sin(angle / 2))))
+
+
 def export_scene(output: Path, options=Options()):
     from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade, Vt
 
@@ -53,7 +75,7 @@ def export_scene(output: Path, options=Options()):
     UsdGeom.SetStageMetersPerUnit(stage, 1.0)
     stage.SetMetadata(
         "documentation",
-        "RoboCup Rescue 2026C Korea: Shifty Gravel, Diagonal K-Rails and the K-Rail practice square with linear align/inspect tasks. See competition/README.md for source dimensions and approximations.",
+        "RoboCup Rescue 2026C Korea competition lanes. See competition/README.md for source dimensions and approximations.",
     )
     materials = {}
     for name, color in COLORS.items():
@@ -62,7 +84,10 @@ def export_scene(output: Path, options=Options()):
         shader.CreateIdAttr("UsdPreviewSurface")
         shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(color)
         shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.85)
-        if name in ("wood", "osb") or name.startswith("target_"):
+        if name == "handle_metal":
+            shader.GetInput("roughness").Set(0.32)
+            shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.8)
+        if name in ("wood", "osb", "slip_disk") or name.startswith("target_"):
             reader = UsdShade.Shader.Define(stage, f"{material.GetPath()}/UV")
             reader.CreateIdAttr("UsdPrimvarReader_float2")
             reader.CreateInput("varname", Sdf.ValueTypeNames.Token).Set("st")
@@ -88,9 +113,15 @@ def export_scene(output: Path, options=Options()):
             shader.ConnectableAPI(), "surface"
         )
         physics = UsdPhysics.MaterialAPI.Apply(material.GetPrim())
-        physics.CreateStaticFrictionAttr(0.85 if name != "gravel" else 0.7)
-        physics.CreateDynamicFrictionAttr(0.65 if name != "gravel" else 0.55)
+        static, dynamic, combine_mode = FRICTION.get(name, (0.85, 0.65, None))
+        physics.CreateStaticFrictionAttr(static)
+        physics.CreateDynamicFrictionAttr(dynamic)
         physics.CreateRestitutionAttr(0.0)
+        if combine_mode:
+            _physx_api(material.GetPrim(), "PhysxMaterialAPI")
+            material.GetPrim().CreateAttribute(
+                "physxMaterial:frictionCombineMode", Sdf.ValueTypeNames.Token
+            ).Set(combine_mode)
         materials[name] = material
 
     all_meshes = [ground_mesh(lanes)] + [mesh for lane in lanes for mesh in lane.meshes]
@@ -137,6 +168,9 @@ def export_scene(output: Path, options=Options()):
         material = materials[data.material]
         binding = UsdShade.MaterialBindingAPI.Apply(mesh.GetPrim())
         binding.Bind(material)
+        for name, indices in data.material_faces.items():
+            subset = binding.CreateMaterialBindSubset(name, Vt.IntArray.FromNumpy(indices.astype(np.int32)))
+            UsdShade.MaterialBindingAPI.Apply(subset.GetPrim()).Bind(materials[name])
         if data.collision:
             UsdPhysics.CollisionAPI.Apply(mesh.GetPrim())
             # PhysX cannot simulate a moving triangle mesh, so loose bodies get a hull.
@@ -147,11 +181,42 @@ def export_scene(output: Path, options=Options()):
         if data.dynamic:
             UsdPhysics.RigidBodyAPI.Apply(mesh.GetPrim())
             UsdPhysics.MassAPI.Apply(mesh.GetPrim()).CreateMassAttr(float(data.mass))
+        if data.contact_offset is not None:
+            _physx_api(mesh.GetPrim(), "PhysxCollisionAPI")
+            mesh.GetPrim().CreateAttribute(
+                "physxCollision:contactOffset", Sdf.ValueTypeNames.Float
+            ).Set(float(data.contact_offset))
+            mesh.GetPrim().CreateAttribute(
+                "physxCollision:restOffset", Sdf.ValueTypeNames.Float
+            ).Set(0.0)
     for lane in lanes:
         for joint in lane.joints:
-            hinge = UsdPhysics.RevoluteJoint.Define(
-                stage, f"{ROOT}/Structure/{lane.key}/{joint.name}"
-            )
+            path = f"{ROOT}/Structure/{lane.key}/{joint.name}"
+            if joint.lift is None:
+                hinge = UsdPhysics.RevoluteJoint.Define(stage, path)
+                hinge.CreateAxisAttr("Z")
+                if joint.limits is not None:
+                    hinge.CreateLowerLimitAttr(float(joint.limits[0]))
+                    hinge.CreateUpperLimitAttr(float(joint.limits[1]))
+                drive_axis = "angular"
+            else:
+                # A loose bolt: a D6 joint whose z is the axis. It turns freely about z and
+                # slides `lift` either way along it, so contact with the seat carries the
+                # load, but it neither slides across the axis nor tilts. A lower limit
+                # above the upper one locks that degree of freedom.
+                hinge = UsdPhysics.Joint.Define(stage, path)
+                play = float(joint.lift)
+                for dof, (low, high) in (
+                    ("transX", (1.0, -1.0)),
+                    ("transY", (1.0, -1.0)),
+                    ("transZ", (-play, play)),
+                    ("rotX", (1.0, -1.0)),
+                    ("rotY", (1.0, -1.0)),
+                ):
+                    limit = UsdPhysics.LimitAPI.Apply(hinge.GetPrim(), dof)
+                    limit.CreateLowAttr(low)
+                    limit.CreateHighAttr(high)
+                drive_axis = "rotZ"
             if joint.body0:
                 hinge.CreateBody0Rel().SetTargets([f"{ROOT}/Structure/{lane.key}/{joint.body0}"])
             hinge.CreateBody1Rel().SetTargets([f"{ROOT}/Structure/{lane.key}/{joint.body1}"])
@@ -160,10 +225,13 @@ def export_scene(output: Path, options=Options()):
             hinge.CreateLocalPos1Attr(
                 Gf.Vec3f(*map(float, pivot - centers[(lane.key, joint.body1)]))
             )
-            hinge.CreateAxisAttr("Z")
-            hinge.CreateLowerLimitAttr(float(joint.limits[0]))
-            hinge.CreateUpperLimitAttr(float(joint.limits[1]))
-            drive = UsdPhysics.DriveAPI.Apply(hinge.GetPrim(), "angular")
+            # Both bodies' frames are world-aligned, so one rotation takes the joint's z to
+            # the axis in each.
+            rotation = _z_to(joint.axis)
+            if rotation is not None:
+                hinge.CreateLocalRot0Attr(rotation)
+                hinge.CreateLocalRot1Attr(rotation)
+            drive = UsdPhysics.DriveAPI.Apply(hinge.GetPrim(), drive_axis)
             drive.CreateTypeAttr("force")
             # UsdPhysics angular drive gains are per DEGREE; Joint's are per radian.
             per_degree = math.pi / 180.0
@@ -190,11 +258,7 @@ def export_scene(output: Path, options=Options()):
             UsdPhysics.MassAPI.Apply(mesh.GetPrim()).CreateMassAttr(mass)
         # Small contact offsets prevent a 2 cm default envelope dwarfing stones.
         prim = mesh.GetPrim()
-        schemas = list(prim.GetAppliedSchemas())
-        prim.SetMetadata(
-            "apiSchemas",
-            Sdf.TokenListOp.CreateExplicit(schemas + ["PhysxCollisionAPI"]),
-        )
+        _physx_api(prim, "PhysxCollisionAPI")
         prim.CreateAttribute(
             "physxCollision:contactOffset", Sdf.ValueTypeNames.Float
         ).Set(0.001)
@@ -323,7 +387,7 @@ def preview_scene(output, options=Options()):
         ax.set_box_aspect((hi[0] - lo[0], hi[1] - lo[1], height))
         ax.view_init(elev=32, azim=-65)
         ax.set_axis_off()
-        ax.set_title(f"F{i+1}  {lane.title}", fontweight="bold", fontsize=13)
+        ax.set_title(f"{i + 1}. {lane.title}", fontweight="bold", fontsize=13)
         top.set(
             xlim=(lo[0], hi[0]),
             ylim=(lo[1], hi[1]),
@@ -335,7 +399,8 @@ def preview_scene(output, options=Options()):
         for a in (ax, top):
             a.set_facecolor("#f1ede6")
     figure.suptitle(
-        f"RoboCup Rescue 2026 · {options.difficulty} · K-Rails {options.k_rail_height*100:g} cm",
+        f"RoboCup Rescue 2026 · gravel and pallets {options.difficulty} · K-Rails "
+        f"{options.k_rail_height * 100:g} cm, layered {options.layered_k_rail_height * 100:g} cm",
         fontsize=22,
         fontweight="bold",
     )
@@ -345,12 +410,22 @@ def preview_scene(output, options=Options()):
 
 
 def add_geometry_args(parser):
-    parser.add_argument("--difficulty", choices=("flat", "slopes"), default="flat")
+    parser.add_argument(
+        "--difficulty", choices=("flat", "slopes"), default="flat",
+        help="tilt the centre floors of the gravel and pallets lanes; the other standard lanes "
+             "have their own sloped levels",
+    )
     parser.add_argument(
         "--k-rail-height",
         type=float,
         default=0.1,
-        help="metres; 0.10–0.40 in 0.05 increments",
+        help="metres; 0.10–0.40 in 0.05 increments. The flat and sloped K-Rail lanes and the square",
+    )
+    parser.add_argument(
+        "--layered-k-rail-height",
+        type=float,
+        default=Options().layered_k_rail_height,
+        help="metres; 0.10–0.40 in 0.05 increments. The K-Rails' Additional Obstacles lane (default: 0.20)",
     )
     parser.add_argument("--gravel", choices=("dynamic", "static"), default="dynamic")
     parser.add_argument("--gravel-seed", type=int, default=2026)
@@ -365,20 +440,22 @@ def add_geometry_args(parser):
     )
     parser.add_argument("--stair-angle", type=float, default=45.0, help="Stair incline, 35-45")
     parser.add_argument(
-        "--stair-debris", type=int, default=0, help="Hinged debris rails on the stair, 0-3"
+        "--stair-debris", type=int, choices=range(4), default=Options().stair_debris,
+        help="Stair debris difficulty: 0 clears the stair, 1-3 adds yellow/orange/red rails (default: 3)",
     )
 
 
 def options_from_args(args):
     return Options(
-        args.difficulty,
-        args.k_rail_height,
-        args.gravel,
-        args.gravel_seed,
-        args.alley_width,
-        args.door_floor,
-        args.stair_angle,
-        args.stair_debris,
+        difficulty=args.difficulty,
+        k_rail_height=args.k_rail_height,
+        gravel=args.gravel,
+        seed=args.gravel_seed,
+        alley_width=args.alley_width,
+        door_floor=args.door_floor,
+        stair_angle=args.stair_angle,
+        stair_debris=args.stair_debris,
+        layered_k_rail_height=args.layered_k_rail_height,
     )
 
 

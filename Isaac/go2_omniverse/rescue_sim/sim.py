@@ -4,9 +4,8 @@
     ./run_sim.sh --level cup                  # start in the cup demo
     ./run_sim.sh --headless --smoke-steps 800 # load every level, lie down and stand up; then exit
 
-Levels load at runtime from the "Rescue sim" window, Page Up/Down or /sim/level. WASD/QE drive the robot (or
-robot0/cmd_vel), and
-the viewport is Isaac's own: move it yourself, or pick "asset root" in Isaac Lab's viewer settings to follow the
+Levels load at runtime from the "Rescue sim" window's buttons or /sim/level. WASD/QE drive the robot (or
+robot0/cmd_vel), and the viewport is Isaac's own: move it yourself, or pick "asset root" in Isaac Lab's viewer settings to follow the
 robot. The arm is not driven by anything in here; see `d1_arm.py` for how to drive it and what it does.
 """
 from __future__ import annotations
@@ -33,7 +32,8 @@ def parse_args(argv=None):
 
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--level", default="gravel",
-                        help="level to start in: a competition lane key (gravel, krails, square, ...) or cup")
+                        help="level to start in: a competition lane key (gravel, krails, krails_slopes, "
+                             "krails_obstacles, ...) or cup; rescue_sim/README.md lists them")
     parser.add_argument("--smoke-steps", type=int, default=0,
                         help="run this many policy steps, loading every level on the way, then exit (>= 300)")
     parser.add_argument("--smoke-shots", default=None, metavar="DIR",

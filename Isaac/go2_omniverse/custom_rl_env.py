@@ -33,13 +33,40 @@ from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 import isaaclab_tasks.manager_based.locomotion.velocity.mdp as mdp
 
-from terrain_cfg import ROUGH_TERRAINS_CFG
+from terrain_cfg import ROUGH_TERRAINS_CFG, ARENA_TERRAIN_CFG
+import arena_layout
 from go2_actuators import apply_go2_actuator
 from robots.g1.config import G1_CFG
 
 # --- HELPER TO DETECT FLAT CONFIG ---
 def is_flat_terrain():
     return "--terrain" in sys.argv and "flat" in sys.argv
+
+
+def _cli_value(flag: str, default: str) -> str:
+    """`--flag value` or `--flag=value` from sys.argv, else `default`.
+
+    The scene config below is built at class-definition time, before the arguments parsed in
+    omniverse_sim.py can reach it, so it reads the command line directly like is_flat_terrain().
+    """
+    for i, arg in enumerate(sys.argv):
+        if arg == flag and i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
+        if arg.startswith(flag + "="):
+            return arg.split("=", 1)[1]
+    return default
+
+
+def custom_env_name() -> str:
+    """What `--custom_env` asked for. "arena" (the default) and "maze" are procedural terrains
+    built here; any other value gets the arena terrain plus whatever static USD
+    omniverse_sim.setup_custom_env() loads for it."""
+    return _cli_value("--custom_env", "arena")
+
+
+def arena_start_name() -> str:
+    """Which of the arena drawing's START|END boxes the robot spawns in (`--arena_start`)."""
+    return _cli_value("--arena_start", arena_layout.DEFAULT_START)
 
 # The 12 joints the walking checkpoint knows about.
 #
@@ -153,11 +180,11 @@ class MySceneCfg(InteractiveSceneCfg):
             ),
         )
     else:
-        # Uses the generator (Maze)
+        # Procedural terrain: the obstacle arena by default, the maze behind --custom_env maze.
         terrain = TerrainImporterCfg(
             prim_path="/World/warehouse/ground",
             terrain_type="generator",
-            terrain_generator=ROUGH_TERRAINS_CFG, 
+            terrain_generator=ROUGH_TERRAINS_CFG if custom_env_name() == "maze" else ARENA_TERRAIN_CFG,
             physics_material=sim_utils.RigidBodyMaterialCfg(
                 friction_combine_mode="multiply",
                 restitution_combine_mode="multiply",
@@ -390,12 +417,20 @@ class LocomotionVelocityRoughEnvCfg(ManagerBasedRLEnvCfg):
 class UnitreeGo2CustomEnvCfg(LocomotionVelocityRoughEnvCfg):
     def __post_init__(self):
         super().__post_init__()
+        if custom_env_name() == "maze":
+            # Maze safe-zone centre (start_r/start_c * cell_width ~= 6 * 1.2), in the sub-terrain's
+            # own (0..size) frame: the generator puts the env origin at -size/2, so this lands at
+            # world (0.2, 0.2).
+            spawn_pos, spawn_rot = (6.2, 6.2, 0.42), (1.0, 0.0, 0.0, 0.0)
+        else:
+            # One of the drawing's START|END boxes, outside the arena. The arena generator returns
+            # its centre as the terrain origin, so these are world coordinates.
+            spawn_pos, spawn_rot = arena_layout.start_pose(arena_start_name())
         self.scene.robot = UNITREE_GO2_CFG.replace(
             prim_path="{ENV_REGEX_NS}/Robot",
             init_state=ArticulationCfg.InitialStateCfg(
-                # Maze safe-zone centre: start_r/start_c * cell_width ~= 6 * 1.2 = 7.2
-                pos=(6.2, 6.2, 0.42),
-                rot=(1.0, 0.0, 0.0, 0.0),
+                pos=spawn_pos,
+                rot=spawn_rot,
                 joint_pos={
                     ".*L_hip_joint": 0.1,
                     ".*R_hip_joint": -0.1,
