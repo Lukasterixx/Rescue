@@ -21,7 +21,7 @@ The **Rescue sim** window has one button per level. It opens as a tab beside the
 | Shifty Gravel | `gravel` | Framed OSB floors with loose gravel between rails |
 | Diagonal K-Rails | `krails` | Diagonal rails across 1.2 m panels |
 | K-Rail Square | `square` | The 2.4 m practice square, with the Linear Align/Inspect tasks |
-| Half-Cubic Stepfields | `stepfields` | Chequered 15 and 30 cm plateaus |
+| Half-Cubic Stepfields | `stepfields` | Diagonal zigzag ridges of 30 cm plateaus with 15 cm ones on every side |
 | Pitch/Roll Ramps | `ramps` | 15 cm ramps, peaks and valleys alternating |
 | Center in Alleys | `alleys` | Three dividers with doorways, alternating sides |
 | Pallets & Pipes | `pallets` | Grid pallets, two cells stacked, with pipes against the raised faces |
@@ -72,10 +72,12 @@ Anything that wants the arm to move talks to it as it would to the real arm, ove
 - `rt/arm_Command` in;
 - `current_servo_angle` and `rt/arm_Feedback` out.
 
-In the VIP-Rescue stack that is `maps/arm_bridge.py --sim`. The behaviour tree reaches it through the bridge's socket, exactly as on the robot:
+In the VIP-Rescue stack that is `maps/arm_bridge.py --sim`, the bridge the robot runs in its vip-arm container. **The sim starts it for you** (`bridge.py`), with the team's D1 driver, and stops it when the sim exits. It listens on 127.0.0.1:8084, as on the robot. The behaviour tree and the website's arm panel reach the arm through it:
 - The cup pick's nodes and the wall scanner use it.
 - `ArmToPose` and `ArmStow` use it too.
 - Their inverse kinematics runs in C++ (`go2_control_cpp/src/d1_arm`).
+
+The sim finds the bridge under `$VIP_RESCUE_ROOT` (default `~/VIP-Rescue`) and the driver in that repo's `Docker/unitree-d1-control` submodule (`git submodule update --init Docker/unitree-d1-control` once; `$D1_DRIVER_ROOT` points elsewhere). If a bridge is already listening on 8084, the sim leaves it to serve the arm and starts none. `--arm-bridge off` starts none; `--arm-bridge PATH` starts another script.
 
 The sim-side IK controller and `/arm_commands` are gone.
 
@@ -144,7 +146,7 @@ Slow is safe for the arm. Its 10 Hz command hold counts sim time, and the VIP-Re
 ## Checked, and not
 
 **Checked on 2026-09-18:**
-- **Unit tests.** `python -m unittest discover -s rescue_sim/tests -t .` runs 32 of them: the firmware through its wire protocol, the levels and the posture ramp. They include parity with D1Training on fixed inputs (`tests/fixtures/d1training.json`, written by `tests/make_fixtures.py` from D1Training 5e19028): the planner's trajectories, the calibration's camera model, the mount, the depth noise and the case registration.
+- **Unit tests.** `python -m unittest discover -s rescue_sim/tests -t .` runs 37 of them: the firmware through its wire protocol, the levels, the posture ramp, and starting and stopping the arm bridge. They include parity with D1Training on fixed inputs (`tests/fixtures/d1training.json`, written by `tests/make_fixtures.py` from D1Training 5e19028): the planner's trajectories, the calibration's camera model, the mount, the depth noise and the case registration.
 - **Smoke run.** `--smoke-steps 800` loads all twelve levels, each within 5 cm of its start. It asks the cup demo to stand up and checks that it stays lying. Then it goes back to the first lane, lies down, stands up and walks. It turns the wrist light on for the maze. `--smoke-shots DIR` saves the wrist camera's image after each load.
 - **The wrist light in the maze.** From a room under the tarp, the wrist camera's image averaged 55 of 255 with the light off and 102 with it on. The walls and fiducials are dim without it, not black.
 - **The cup pick end to end, as the robot runs it.** This is the unchanged C++ cup pick (`cup_pick_launch.py robot:=sim`), through `arm_bridge.py --sim` with the team's D1 driver. It found the cup from the survey look, planned an outside grasp and lifted it **11.9 cm** by `/sim/cup_pose`, in 22.7 s of sim time.
@@ -166,6 +168,7 @@ Slow is safe for the arm. Its 10 Hz command hold counts sim time, and the VIP-Re
 | `levels.py`, `runtime.py` | The level catalogue, the cup demo and the posture ramp; loading, the window and the keys |
 | `d1_model.py` | D1Training's arm constants, planner and sampler, verbatim, and the real arm's wire conventions |
 | `d1_arm.py`, `d1_drive.py` | The simulated firmware and its DDS link, and where it meets PhysX |
+| `bridge.py` | VIP-Rescue's arm bridge, started and stopped with the sim |
 | `realsense.py`, `camera_asset.py`, `cup_asset.py` | The camera model, mount, depth noise and ROS publisher, the case, and the cup, from D1Training |
 | `ros_io.py` | The ROS node, the lidar, the IMU |
 | `assets/` | The calibration, the mount, the D435 case mesh and the cup model, with their licences |

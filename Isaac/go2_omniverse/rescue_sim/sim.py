@@ -49,6 +49,10 @@ def parse_args(argv=None):
     add_geometry_args(parser)
     # The arm.
     parser.add_argument("--d1_domain_id", type=int, default=0, help="DDS domain of the simulated D1 (the real one: 0)")
+    parser.add_argument("--arm-bridge", default="auto", metavar="auto|off|PATH",
+                        help="start VIP-Rescue's maps/arm_bridge.py --sim with the sim, so the behaviour tree and the "
+                             "website reach the arm on 127.0.0.1:8084 as on the robot (default auto: the one under "
+                             "$VIP_RESCUE_ROOT or ~/VIP-Rescue; skipped if something already listens on the port)")
     parser.add_argument("--arm_mass", type=float, default=3.152, metavar="KG",
                         help="D1 mass in kg; Unitree's published D1-550 figure, as D1Training uses")
     # The camera.
@@ -155,6 +159,7 @@ def run(args, simulation_app):
 
     from rescue_sim import d1_model, env_cfg as envs, levels as lv
     from rescue_sim.camera_asset import build_camera_usd
+    from rescue_sim.bridge import ArmBridge
     from rescue_sim.cup_asset import build_cup_usd
     from rescue_sim.d1_drive import SimulatedD1
     from rescue_sim.realsense import (DEFAULT_MOUNT, WristCameraPublisher, load_mount, rendered_intrinsics,
@@ -219,6 +224,12 @@ def run(args, simulation_app):
     print(f"[D1] simulated arm on DDS domain {args.d1_domain_id}: commands held {d1.firmware.hold_steps} steps, "
           f"feedback every {d1.firmware.feedback_period_steps} steps, resting at "
           f"{[round(math.degrees(q), 1) for q in rest_q]} deg", flush=True)
+
+    bridge, why = ArmBridge.resolve(args.arm_bridge, domain_id=args.d1_domain_id)
+    if bridge is None:
+        print(f"[arm_bridge] {why}", flush=True)
+    else:
+        bridge.start()
 
     rclpy.init()
 
@@ -301,6 +312,8 @@ def run(args, simulation_app):
     finally:
         if keyboard is not None:
             keyboard()
+        if bridge is not None:
+            bridge.stop()
         ros.close()
         executor.shutdown()
         for leftover in (scene_usd, scene_usd.with_suffix(".json")):
@@ -518,4 +531,7 @@ def main(argv=None):
         sys.stderr.flush()
         raise
     finally:
+        from rescue_sim import bridge
+
+        bridge.stop_all()
         app.close()

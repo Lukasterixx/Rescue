@@ -245,7 +245,7 @@ cd ~/Rescue/Isaac/go2_omniverse
 ```
 
 - **Levels:** the competition's eleven lanes, from Shifty Gravel to the Search & Map Maze, and the cup demo. Load them at runtime from the window, with Page Up/Down, or with `/sim/level`.
-- **The arm is not driven by the sim.** It rests folded until the behaviour tree moves it through `maps/arm_bridge.py --sim`, exactly as on the robot. The sim's D1 is D1Training's model of the real arm: its drives, its firmware planner, its 10 Hz commands and 9 Hz feedback, and its servo signs and gripper units on the wire.
+- **The arm is not driven by the sim.** It rests folded until the behaviour tree moves it through VIP-Rescue's `maps/arm_bridge.py --sim`, exactly as on the robot. The sim starts that bridge itself. The sim's D1 is D1Training's model of the real arm: its drives, its firmware planner, its 10 Hz commands and 9 Hz feedback, and its servo signs and gripper units on the wire.
 - **The wrist RealSense** is D1Training's: the bench D435i's calibration, the saved wrist mount, and depth with range limits and stereo noise. It is published on the realsense container's `/camera/...` topics.
 - **The viewport is yours.** To follow the robot, set Follow Mode to "Asset Root" in the IsaacLab tab.
 - **Driving:** W A S D Q E, or `robot0/cmd_vel`. Also on ROS: `/clock`, `/joint_states`, `/odom`, the lidar on `/glim_rosnode/points` and its IMU on `/livox/imu`.
@@ -255,7 +255,7 @@ cd ~/Rescue/Isaac/go2_omniverse
 1. Open a new terminal and enter `sim`.
 2. Once loaded, pick a level in the Rescue sim window.
 3. Open another terminal and enter `slam` to run the go2_control_cpp code for Rescue. If no `map2d.pgm` exists in share/go2_control_cpp/map, it will begin in exploration mode and create the map. If `map2d.pgm` does exist, it will pathplan on it and begin routine scans.
-4. For anything that moves the arm (the wall scanner, the cup pick), run the arm bridge beside the sim: `python3 maps/arm_bridge.py --sim`. The VIP-Rescue website passes `--sim` itself when it runs against the sim.
+4. Anything that moves the arm (the wall scanner, the cup pick) goes through the arm bridge, which the sim starts on 127.0.0.1:8084. It needs VIP-Rescue at `~/VIP-Rescue` (or `$VIP_RESCUE_ROOT`) with its D1 driver submodule checked out.
 
 ## Adding a new node
 1. Write your cpp in `/src/`, and hpp in `include/go2_control_cpp/`.
