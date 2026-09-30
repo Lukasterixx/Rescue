@@ -54,9 +54,6 @@ D1_GRIPPER_JOINTS = ["Joint7_1", "Joint7_2"]
 # the policy trains on a different payload from the one it drives.
 D1_550_MASS_KG = 3.152
 
-# Arm base offset from the Go2's base link, in metres. Rescue's ARM_MOUNT_Z.
-ARM_MOUNT_Z = 0.08
-
 # The sim's WELD gains (omniverse_sim.py, `--arm_mount weld` branch). These say how hard
 # the servo chases its target; PhysX still clamps torque at the joint's published effort
 # limit, so raising them buys tracking, never strength. 800 (the teleport value) behaves as
@@ -96,14 +93,14 @@ def build_welded_go2_cfg(base_cfg: ArticulationCfg, arm_mass_kg: float = D1_550_
     root = go2_omniverse_root()
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
-    from arm_weld import build_welded_robot_usd  # noqa: E402  (needs pxr; app must be up)
+    from arm_weld import D1_MOUNT_POS, build_welded_robot_usd  # noqa: E402  (needs pxr; app must be up)
     from go2_actuators import apply_go2_actuator  # noqa: E402
 
     weld = build_welded_robot_usd(
         go2_usd_path=base_cfg.spawn.usd_path,
         d1_urdf_path=os.path.join(root, "d1_arm", "d1.urdf"),
         out_usd_path=os.path.join(root, "d1_arm", "generated", TRAIN_USD_NAME),
-        mount_pos=(0.0, 0.0, ARM_MOUNT_Z),
+        mount_pos=D1_MOUNT_POS,
         arm_mass_kg=arm_mass_kg,
     )
 

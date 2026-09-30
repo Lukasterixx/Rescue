@@ -6,10 +6,12 @@ Two halves, kept apart on purpose:
 * **The legs are Rescue's.** The walking policy (`agent_cfg.py`) was trained and measured against this
   observation layout (235 wide, height scan included), Unitree's measured motor curve (`go2_actuators.py`) and a
   0.25 action scale. None of that changes here. Its joint terms are scoped to the 12 leg joints, because the weld
-  makes the robot 20 joints wide.
+  makes the robot 20 joints wide. `--policy` swaps in an exported policy's own observation and action settings
+  instead, read from its deploy contract (`apply_exported_policy`, `exported_policy.py`).
 * **The arm and the camera are D1Training's** (`demos/cup/pick_demo/scene.py` and `flat_env_cfg.make_robot_cfg`,
-  commit 5e19028), so a policy trained there meets the same arm here: the D1 welded at (0, 0, 0.08) with the
-  published 3.152 kg (`arm_weld.py`, D1Training's `weld.py`), force drives at 4000/400 with the published torque
+  commit 5e19028), so a policy trained there meets the same arm here: the D1 welded on the rails, midway between
+  their screws, at (-0.019, 0, 0.0855) (`arm_weld.D1_MOUNT_POS`; (0, 0, 0.08) before 2026-09-30, which is where
+  any policy trained earlier had it), with the published 3.152 kg (`arm_weld.py`, D1Training's `weld.py`), force drives at 4000/400 with the published torque
   limits and the measured speed ceilings (`arm_actuator="d1_servo"`), the fitted firmware planner between setpoint
   and drive (`d1_arm.D1Firmware`, run by the `D1ArmAction` term below), 8/4 solver iterations and self-collisions
   on. The wrist camera and its visual case are D1Training's too (`realsense.py`, `camera_asset.py`).
@@ -44,7 +46,7 @@ from isaaclab_assets.robots.unitree import UNITREE_GO2_CFG
 
 from go2_actuators import apply_go2_actuator
 
-from . import d1_model
+from . import d1_model, exported_policy
 from .realsense import FAR_CLIP_M, NEAR_CLIP_M
 
 # The 12 joints the walking checkpoint knows about. Scoping is safe because SceneEntityCfg resolves joint names in
@@ -60,12 +62,18 @@ LINK6_PATH = WELD_PATH + "/Link6"
 
 # Velocity commands come from ROS (robot0/cmd_vel) and the keyboard, not the env's own sampler.
 base_command: dict[str, list[float]] = {}
+# Per-axis (lows, highs) for (vx, vy, wz), or None for no clamp. An exported policy sets its training envelope here
+# (`--policy`): it has never seen a command outside it. The sim's own policy leaves it None.
+command_limits: tuple[list[float], list[float]] | None = None
 
 
 def constant_commands(env) -> torch.Tensor:
     out = torch.zeros(env.num_envs, 3, dtype=torch.float32, device=env.device)
     for i in range(env.num_envs):
         out[i] = torch.tensor(base_command.get(str(i), [0.0, 0.0, 0.0]), dtype=torch.float32, device=env.device)
+    if command_limits is not None:
+        lows, highs = (torch.tensor(v, dtype=torch.float32, device=env.device) for v in command_limits)
+        out = torch.clamp(out, min=lows, max=highs)
     return out
 
 
@@ -87,6 +95,14 @@ def height_scan_walls_removed(env, sensor_cfg, wall_threshold: float = WALL_SCAN
     floor = torch.where(torch.isnan(floor), fallback, floor)
     floor = torch.nan_to_num(floor, nan=0.0, posinf=0.0, neginf=0.0)
     return torch.where(wall, floor.expand_as(h), torch.nan_to_num(h, nan=0.0, posinf=0.0, neginf=0.0))
+
+
+def height_scan_exported(env, sensor_cfg, offset: float = 0.5, mask=None, unobserved_value: float = 0.0):
+    """An exported policy's height scan, read as it was in training (`exported_policy.height_scan`): walls are not
+    removed, because the policy never saw them removed."""
+    sensor = env.scene[sensor_cfg.name]
+    return exported_policy.height_scan(sensor.data.pos_w, sensor.data.quat_w, sensor.data.ray_hits_w, offset, mask,
+                                       unobserved_value)
 
 
 # ------------------------------------------------------------------------------------------ the arm's drives
@@ -186,6 +202,58 @@ class ObservationsCfg:
     policy: PolicyCfg = PolicyCfg()
 
 
+def exported_observations(bundle) -> ObservationsCfg:
+    """The policy group for an exported policy (`exported_policy.Bundle`): its contract's terms in its order, each
+    with the recorded clip and then scale (Isaac Lab applies them in that order, as training did). The functions
+    are the ones training used; only the command and the scan are the sim's own, as they are for its own policy."""
+    contract = bundle.contract
+    legs = lambda: {"asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINTS)}
+    terms = {
+        "base_lin_vel": (mdp.base_lin_vel, dict),
+        "base_ang_vel": (mdp.base_ang_vel, dict),
+        "projected_gravity": (mdp.projected_gravity, dict),
+        "velocity_commands": (constant_commands, dict),
+        "joint_pos_rel": (mdp.joint_pos_rel, legs),
+        "joint_vel_rel": (mdp.joint_vel_rel, legs),
+        "last_action": (mdp.last_action, dict),
+        "height_scan": (height_scan_exported, lambda: {
+            "sensor_cfg": SceneEntityCfg("height_scanner"), "offset": bundle.scan_offset, "mask": bundle.mask,
+            "unobserved_value": contract.height_scan_unobserved}),
+    }
+    group = ObsGroup()
+    group.enable_corruption = False
+    group.concatenate_terms = True
+    for name in contract.obs_terms:
+        func, params = terms[name]
+        scale = contract.obs_scales[name]
+        setattr(group, name, ObsTerm(func=func, params=params(), clip=contract.obs_clips[name],
+                                     scale=None if scale is None else tuple(scale)))
+    cfg = ObservationsCfg()
+    cfg.policy = group
+    return cfg
+
+
+def apply_exported_policy(cfg: "RescueEnvCfg", bundle) -> None:
+    """Swap the sim's own policy's observation and action settings for an exported policy's. The legs' motor, gains,
+    default pose and control rate are not touched: they already match the bundle's, and `sim.py` checks that they
+    do before the policy gets the legs."""
+    cfg.observations = exported_observations(bundle)
+    contract = bundle.contract
+    cfg.actions.joint_pos.scale = contract.action_scale
+    # The target is default pose + scale * action for both of the 2026-09-18 policies (env.yaml:
+    # use_default_offset), whatever deploy.yaml's `offset` field says.
+    cfg.actions.joint_pos.use_default_offset = True
+    if contract.action_clip is not None:
+        cfg.actions.joint_pos.clip = {name: tuple(float(v) for v in pair)
+                                      for name, pair in zip(exported_policy.ISAAC_LAB_LEG_ORDER, contract.action_clip)}
+    if bundle.scanner is not None:
+        scanner = cfg.scene.height_scanner
+        scanner.offset = RayCasterCfg.OffsetCfg(pos=bundle.scanner.offset)
+        scanner.ray_alignment = bundle.scanner.ray_alignment
+        scanner.pattern_cfg = patterns.GridPatternCfg(resolution=bundle.scanner.resolution,
+                                                      size=list(bundle.scanner.size), ordering=bundle.scanner.ordering)
+
+
 @configclass
 class ActionsCfg:
     joint_pos = mdp.JointPositionActionCfg(asset_name="robot", joint_names=LEG_JOINTS, scale=0.25,
@@ -283,7 +351,8 @@ def robot_cfg(robot_usd: str, spawn, spawn_rotation, arm_q, finger_travel) -> Ar
 
 def make_env_cfg(*, terrain_usd: str, scan_mesh: str, robot_usd: str, cup_usd: str, cup_pose, camera, mount,
                  camera_body_usd: str | None, spawn, spawn_rotation, arm_q, finger_travel, device: str = "cuda:0",
-                 seed: int = 42, camera_period_s: float = 0.0) -> RescueEnvCfg:
+                 seed: int = 42, camera_period_s: float = 0.0, policy=None) -> RescueEnvCfg:
+    """`policy`: an `exported_policy.Bundle` to build the observation for, or None for the sim's own policy."""
     cfg = RescueEnvCfg()
     cfg.seed = seed
     cfg.sim.device = device
@@ -320,4 +389,6 @@ def make_env_cfg(*, terrain_usd: str, scan_mesh: str, robot_usd: str, cup_usd: s
             init_state=AssetBaseCfg.InitialStateCfg(pos=tuple(mount.pos_link6), rot=mount.quat_wxyz()),
         )
     cfg.sim.physics_material = scene.terrain.physics_material
+    if policy is not None:
+        apply_exported_policy(cfg, policy)
     return cfg

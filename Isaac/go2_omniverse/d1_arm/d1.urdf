@@ -4,11 +4,14 @@
      For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
 <robot
   name="d1_description">
+  <!-- base_link is the base Lukas measured on the real arm (2026-09-30): 126 mm across, 76 mm from its bottom
+       to the rotating plate, holes 130 mm apart along the rail. Unitree's base_link.STL is 105 mm, 53.3 mm, 108 mm.
+       The mesh, its centre of mass and Joint1's height all come from d1_arm/measured_base.py. -->
   <link
     name="base_link">
     <inertial>
       <origin
-        xyz="-0.00048697 -2.9605E-12 0.017142"
+        xyz="-0.00058436 0 0.022848"
         rpy="0 0 0" />
       <mass
         value="0.077233" />
@@ -26,7 +29,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="meshes/base_link.STL" />
+          filename="meshes/base_link_measured.STL" />
       </geometry>
       <material
         name="">
@@ -40,7 +43,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="meshes/base_link.STL" />
+          filename="meshes/base_link_measured.STL" />
       </geometry>
     </collision>
   </link>
@@ -88,7 +91,7 @@
     name="Joint1"
     type="revolute">
     <origin
-      xyz="0 0 0.0533"
+      xyz="0 0 0.076"
       rpy="0 0 -3.1416" />
     <parent
       link="base_link" />

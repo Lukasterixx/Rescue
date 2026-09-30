@@ -167,9 +167,11 @@ import arm_mount
 WELDED = args_cli.arm_mount == "weld"
 arm_mount.set_welded(WELDED)
 
-# Height of the arm's base above the robot root. Under weld this is the fixed
-# joint's offset; under teleport it is the per-step pinning offset.
-ARM_MOUNT_Z = 0.08
+# Where the arm's base sits on the robot root. Under weld this is the fixed
+# joint's offset; under teleport it is the per-step pinning offset. On the rails'
+# tops, midway between their screws; must match arm_weld.D1_MOUNT_POS (this module
+# is read before the app is up, and arm_weld needs pxr). Was (0, 0, 0.08).
+ARM_MOUNT_POS = (-0.019, 0.0, 0.0855)
 
 # Default arm IK target, relative to robot base/root frame.
 DEFAULT_ARM_TELEOP_POS = [0.3, 0.0, 0.4]
@@ -987,24 +989,25 @@ def sub_keyboard_event(event, *args, **kwargs) -> bool:
             if ARM_TELEOP_POS[2] < 0.05:
                 ARM_TELEOP_POS[2] = 0.05
                 
-            # 2. Prevent colliding with its own base (Bounding Box around origin)
-            if -0.15 < ARM_TELEOP_POS[0] < 0.15 and -0.15 < ARM_TELEOP_POS[1] < 0.15:
+            # 2. Prevent colliding with its own base (Bounding Box around the arm's base)
+            mx, my, mz = ARM_MOUNT_POS
+            if -0.15 < ARM_TELEOP_POS[0] - mx < 0.15 and -0.15 < ARM_TELEOP_POS[1] - my < 0.15:
                 if ARM_TELEOP_POS[2] < 0.2:
                     ARM_TELEOP_POS[2] = 0.2
                     
             # 3. Max reach (Prevent IK singularities / stretching beyond hardware limits)
-            # Reach is measured from the arm's own base, which sits ARM_MOUNT_Z
-            # above the robot root -- not from the root itself.
-            dx = ARM_TELEOP_POS[0]
-            dy = ARM_TELEOP_POS[1]
-            dz = ARM_TELEOP_POS[2] - ARM_MOUNT_Z
+            # Reach is measured from the arm's own base, which sits at ARM_MOUNT_POS
+            # on the robot root -- not from the root itself.
+            dx = ARM_TELEOP_POS[0] - mx
+            dy = ARM_TELEOP_POS[1] - my
+            dz = ARM_TELEOP_POS[2] - mz
             dist = np.sqrt(dx * dx + dy * dy + dz * dz)
             max_reach = ARM_MAX_REACH
             if dist > max_reach:
                 scale = max_reach / dist
-                ARM_TELEOP_POS[0] = dx * scale
-                ARM_TELEOP_POS[1] = dy * scale
-                ARM_TELEOP_POS[2] = ARM_MOUNT_Z + dz * scale
+                ARM_TELEOP_POS[0] = mx + dx * scale
+                ARM_TELEOP_POS[1] = my + dy * scale
+                ARM_TELEOP_POS[2] = mz + dz * scale
 
             # --- DEBUG: Print the bounded target position AND yaw ---
             yaw_deg = np.degrees(ARM_TELEOP_YAW)
@@ -1209,7 +1212,7 @@ def setup_welded_arm(env_cfg):
         go2_usd_path=env_cfg.scene.robot.spawn.usd_path,
         d1_urdf_path=os.path.join(project_root, "d1_arm", "d1.urdf"),
         out_usd_path=os.path.join(project_root, "d1_arm", "generated", "go2_d1.usd"),
-        mount_pos=(0.0, 0.0, ARM_MOUNT_Z),
+        mount_pos=ARM_MOUNT_POS,
         arm_mass_kg=args_cli.arm_mass,
     )
 
@@ -1492,7 +1495,7 @@ def run_sim():
                 # Grab the current base position and orientation
                 root_pose = robot.data.root_state_w[:, :7].clone()
 
-                local_offset = torch.tensor([[0.0, 0.0, ARM_MOUNT_Z]], device=env.unwrapped.device, dtype=torch.float32)
+                local_offset = torch.tensor([list(ARM_MOUNT_POS)], device=env.unwrapped.device, dtype=torch.float32)
                 local_offset = local_offset.repeat(env_cfg.scene.num_envs, 1)
 
                 # B. Rotate this local offset into the world frame using the dog's orientation

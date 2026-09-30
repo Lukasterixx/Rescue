@@ -43,6 +43,10 @@ def parse_args(argv=None):
                         help="never run faster than real time (default on): the arm's 10 Hz bridge runs on "
                              "the wall clock")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--policy", default=None, metavar="DIR",
+                        help="walk with an exported policy instead of agent_cfg.py's checkpoint: a directory holding "
+                             "policy.pt and params/deploy.yaml, absolute or relative to the sim directory, e.g. "
+                             "policies/go2_policies_2026-09-18/flat or .../rough")
     # The competition's geometry.
     from competition.build import add_geometry_args
 
@@ -140,6 +144,60 @@ def _load_policy(env, agent_cfg, device):
     return runner, runner.get_inference_policy(device=device)
 
 
+def _load_exported(bundle, core):
+    """An exported walking policy (`--policy`), once the sim is checked to run the legs as it trained: in the Isaac
+    Lab joint order, from its default pose, with its gains, at its control rate, into an observation of its width.
+    Every one of those is wrong silently, so a mismatch stops the sim instead."""
+    from isaaclab.managers import SceneEntityCfg
+
+    from go2_actuators import GO2_LEG_ACTUATOR_GROUP
+    from rescue_sim import env_cfg as envs, exported_policy as xp
+
+    contract = bundle.contract
+    robot = core.scene["robot"]
+    legs = SceneEntityCfg("robot", joint_names=envs.LEG_JOINTS)      # as the leg observation terms resolve them
+    legs.resolve(core.scene)
+    ids = list(range(robot.num_joints)) if isinstance(legs.joint_ids, slice) else list(legs.joint_ids)
+    names = [robot.data.joint_names[i] for i in ids]
+    problems = xp.leg_problems(contract, names, robot.data.default_joint_pos[0, ids].tolist())
+    acted = list(core.action_manager.get_term("joint_pos")._joint_names)
+    if acted != names:
+        problems.append(f"the action term drives {acted}, but the observation reads {names}")
+    width = core.observation_manager.group_obs_dim["policy"][0]
+    if width != contract.obs_dim:
+        problems.append(f"the observation is {width} wide, the contract's {contract.obs_dim}")
+    if abs(core.step_dt - contract.step_dt) > 1e-9:
+        problems.append(f"the sim steps the policy every {core.step_dt} s, the contract every {contract.step_dt} s")
+    actuator = robot.actuators[GO2_LEG_ACTUATOR_GROUP]
+    try:
+        for what, have, want in (("stiffness", actuator.stiffness, contract.kp),
+                                 ("damping", actuator.damping, contract.kd)):
+            if not _all_near(have, want):
+                problems.append(f"leg {what} is {sorted(set(have.flatten().tolist()))}, trained {want}")
+    except xp.DeployContractError as exc:
+        problems.append(str(exc))
+    if problems:
+        raise SystemExit(f"[policy] {bundle.directory} cannot drive this robot:\n  " + "\n  ".join(problems))
+    policy = xp.ExportedPolicy(bundle, core.device)
+    print(f"[policy] walking policy: {bundle.weights}", flush=True)
+    print(f"[policy] {bundle.describe()}", flush=True)
+    print(f"[policy] legs as trained: Isaac Lab order, default pose, kp {contract.kp:g} kd {contract.kd:g}, "
+          f"{contract.control_rate:g} Hz", flush=True)
+    if bundle.scanner is not None:
+        # The scan as the policy will first see it: a masked scan misplaced by the scanner's offset sees far fewer.
+        start = sum(contract.obs_widths[t] for t in contract.obs_terms[:contract.obs_terms.index("height_scan")])
+        scan = core.observation_manager.compute_group("policy")[0, start:start + bundle.scanner.num_rays]
+        seen = scan != contract.height_scan_unobserved if bundle.mask else scan.isfinite()
+        print(f"[policy] height scan at the start: {int(seen.sum())} of {scan.numel()} cells seen"
+              + (" (97 on flat ground when standing)" if bundle.mask else "")
+              + (f", median {float(scan[seen].median()):+.2f}" if bool(seen.any()) else ""), flush=True)
+    return policy
+
+
+def _all_near(values, target: float, tol: float = 1e-6) -> bool:
+    return bool(((values - target).abs() <= tol).all())
+
+
 def run(args, simulation_app):
     import numpy as np
     import torch
@@ -153,7 +211,7 @@ def run(args, simulation_app):
     from isaaclab_assets.robots.unitree import UNITREE_GO2_CFG
 
     from agent_cfg import unitree_go2_agent_cfg as agent_cfg
-    from arm_weld import build_welded_robot_usd
+    from arm_weld import D1_MOUNT_POS, build_welded_robot_usd
     from competition.build import TERRAIN_PATH, export_scene, options_from_args
     from competition.runtime import loose_resets
 
@@ -168,6 +226,14 @@ def run(args, simulation_app):
     from rescue_sim.runtime import LevelManager
 
     GENERATED.mkdir(parents=True, exist_ok=True)
+    exported = None
+    if args.policy:
+        from rescue_sim.exported_policy import Bundle, ExportedPolicyError, resolve
+
+        try:
+            exported = Bundle.load(resolve(args.policy, SIM_DIR))
+        except ExportedPolicyError as exc:
+            raise SystemExit(f"[policy] {exc}")
     # --- the world ----------------------------------------------------------------------------------------
     options = options_from_args(args)
     scene_usd = GENERATED / f"competition_{os.getpid()}.usdc"
@@ -182,7 +248,7 @@ def run(args, simulation_app):
     # --- the robot, the arm, the cup, the camera -----------------------------------------------------------
     urdf = SIM_DIR / "d1_arm" / "d1.urdf"
     weld = build_welded_robot_usd(go2_usd_path=UNITREE_GO2_CFG.spawn.usd_path, d1_urdf_path=str(urdf),
-                                  out_usd_path=str(GENERATED / "go2_d1.usd"), mount_pos=(0.0, 0.0, 0.08),
+                                  out_usd_path=str(GENERATED / "go2_d1.usd"), mount_pos=D1_MOUNT_POS,
                                   arm_mass_kg=args.arm_mass)
     lower, upper = _urdf_arm_limits(urdf)
     rest_q = d1_model.rest_joint_rad(lower, upper)
@@ -202,9 +268,12 @@ def run(args, simulation_app):
         cup_usd=cup["usd_path"], cup_pose=lv.cup_pose(lv.CUP_DEMO), camera=camera, mount=mount,
         camera_body_usd=body, spawn=level.spawn, spawn_rotation=level.spawn_rotation, arm_q=rest_q,
         finger_travel=rest_travel, device=args.device, seed=args.seed,
-        camera_period_s=max(1, round(1.0 / (args.camera_hz * 0.02))) * 0.02)
+        camera_period_s=max(1, round(1.0 / (args.camera_hz * 0.02))) * 0.02, policy=exported)
     envs.base_command["0"] = [0.0, 0.0, 0.0]
-    env = RslRlVecEnvWrapper(ManagerBasedRLEnv(cfg=cfg), clip_actions=agent_cfg.get("clip_actions"))
+    envs.command_limits = exported.contract.command_ranges if exported else None
+    # agent_cfg's clip is the sim's own policy's training value. An exported policy's clip, if it has one, is on its
+    # action term (`apply_exported_policy`), where its training put it.
+    env = RslRlVecEnvWrapper(ManagerBasedRLEnv(cfg=cfg), clip_actions=None if exported else agent_cfg.get("clip_actions"))
     core = env.unwrapped
     robot = core.scene["robot"]
     names = list(robot.data.joint_names)
@@ -212,7 +281,7 @@ def run(args, simulation_app):
     if missing:
         raise RuntimeError(f"The weld did not take: {missing} are not in the Go2's articulation")
     print(f"[robot] {len(names)} joints, {float(robot.root_physx_view.get_masses()[0].sum()):.3f} kg", flush=True)
-    _, policy = _load_policy(env, agent_cfg, core.device)
+    policy = _load_exported(exported, core) if exported else _load_policy(env, agent_cfg, core.device)[1]
 
     # --- sensors that need the timeline, then a reset for them to take ----------------------------------------
     add_lidar(1, debug=False)
@@ -303,7 +372,7 @@ def run(args, simulation_app):
                     ros.save_images(rgb, 1.0 / (camera_every * step_dt))
                     rate.mark("camera")
                 if smoke is not None:
-                    smoke.check(steps, core, manager, d1, camera_pub, wrist)
+                    smoke.check(steps, core, manager, d1, camera_pub, wrist, actions if legs is None else None)
                     if smoke.done(steps):
                         break
             if args.realtime:
@@ -412,25 +481,36 @@ def _subscribe_keys(manager, base_command):
 
 
 class _Smoke:
-    """`--smoke-steps`: load every level in turn, then go back to the first, lie down and stand up again. Checks that
-    nothing goes non-finite, that loads land where they should, that a level with a fixed posture keeps it when asked
-    to change it, and that the arm and the camera report. The wrist light is on for the maze and off again after."""
+    """`--smoke-steps`: load every level in turn, then go back to the first, lie down, stand up again and walk forward
+    for the steps that are left. Checks that nothing goes non-finite, that loads land where they should, that a level
+    with a fixed posture keeps it when asked to change it, that the arm and the camera report, and that the walk
+    ends on its feet. The wrist light is on for the maze and off again after. Reports how far the walk got and the
+    largest action the walking policy gave: normal walking stays around 10 at most (agent_cfg.py), and a wrong
+    observation saturates well past it (28 in the 2026-09-18 bundle's README)."""
 
     SHOT_DELAY = 40            # steps after a load: the robot has settled and the camera has published
+    WALK = (0.5, 0.0, 0.0)     # the closing walk's command: vx, vy, wz
+    WALK_STEPS = 150           # at least 3 s of it, when --smoke-steps leaves room
+    FALLEN_GRAVITY_Z = -0.5    # the trunk tilted past 60 degrees
 
     def __init__(self, total: int, levels, shots=None, headless: bool = True):
         self.total, self.levels, self.count = total, levels, len(levels)
         # Every level, then back to the first, lie down and stand up: room after that for the stand-up ramp (75 steps)
-        # and some walking.
-        self.gap = max(10, (total - 100) // (self.count + 3))
+        # and the closing walk.
+        self.gap = max(10, (total - 100 - self.WALK_STEPS) // (self.count + 3))
         self.failures = []
         self.checked_loads = 0
         self.shots = Path(shots) if shots else None
         self.headless = headless
         self.shot_at = None
+        self.walk_start = None      # (step, x, y, yaw) once the closing walk begins
+        self.walk_end = None
+        self.fell_at = None
+        self.max_action = 0.0
         if self.shots is not None and self.gap <= self.SHOT_DELAY:
             print(f"[smoke] loads are {self.gap} steps apart, too close for shots {self.SHOT_DELAY} steps after each; "
-                  f"--smoke-steps {100 + (self.count + 3) * (self.SHOT_DELAY + 1)} leaves room", flush=True)
+                  f"--smoke-steps {100 + self.WALK_STEPS + (self.count + 3) * (self.SHOT_DELAY + 1)} leaves room",
+                  flush=True)
 
     def drive(self, step: int, manager) -> None:
         if step and step % self.gap == 0:
@@ -444,8 +524,13 @@ class _Smoke:
                 manager.request_posture_toggle()     # lie down, then stand up again
         elif step % self.gap == self.gap // 2 and manager.level.posture_fixed:
             manager.request_posture_toggle()         # refused: the level keeps its posture
+        if self.walk_start is not None:
+            from rescue_sim import env_cfg
 
-    def check(self, step: int, core, manager, d1, camera_pub, wrist) -> None:
+            env_cfg.base_command["0"] = list(self.WALK)
+
+    def check(self, step: int, core, manager, d1, camera_pub, wrist, actions=None) -> None:
+        """`actions`: what the walking policy gave this step, or None when it did not have the legs."""
         import torch
 
         self.arm_feedback = d1.firmware.step
@@ -454,6 +539,18 @@ class _Smoke:
         robot = core.scene["robot"]
         if not torch.isfinite(robot.data.root_state_w).all():
             self.failures.append(f"non-finite robot state at step {step}")
+        if actions is not None:
+            self.max_action = max(self.max_action, float(actions.abs().max()))
+        if self.walk_start is None and self.walking and step > (self.count + 2) * self.gap:
+            x, y = robot.data.root_pos_w[0, :2].tolist()
+            w, qx, qy, qz = robot.data.root_quat_w[0].tolist()
+            self.walk_start = (step, x, y, math.atan2(2 * (w * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz)))
+            print(f"[smoke] walking forward at {self.WALK[0]} m/s from ({x:.2f}, {y:.2f})", flush=True)
+        if self.walk_start is not None:
+            self.walk_end = (step, *robot.data.root_pos_w[0, :2].tolist())
+            if self.fell_at is None and float(robot.data.projected_gravity_b[0, 2]) > self.FALLEN_GRAVITY_Z:
+                self.fell_at = step
+                self.failures.append(f"fell over at step {step}, {step - self.walk_start[0]} steps into the walk")
         level = manager.level
         if level.posture_fixed and (manager.posture.posture != level.posture or manager.posture.walking):
             self.failures.append(f"{level.key} left its fixed posture at step {step}")
@@ -507,6 +604,15 @@ class _Smoke:
             self.failures.append("the wrist camera published nothing")
         if not getattr(self, "walking", False):
             self.failures.append("the robot never stood back up to walk")
+        if self.walk_start is not None and self.walk_end is not None:
+            (s0, x0, y0, yaw), (s1, x1, y1) = self.walk_start, self.walk_end
+            dx, dy = x1 - x0, y1 - y0
+            ahead = dx * math.cos(yaw) + dy * math.sin(yaw)
+            aside = -dx * math.sin(yaw) + dy * math.cos(yaw)
+            seconds = (s1 - s0) * 0.02
+            print(f"[smoke] walked {ahead:.2f} m forward and {aside:+.2f} m sideways in {seconds:.1f} s "
+                  f"({ahead / seconds if seconds else 0.0:.2f} m/s for {self.WALK[0]} commanded)", flush=True)
+        print(f"[smoke] largest walking action {self.max_action:.2f}", flush=True)
         if self.failures:
             print("[smoke] FAIL: " + "; ".join(self.failures), flush=True)
             raise SystemExit(1)

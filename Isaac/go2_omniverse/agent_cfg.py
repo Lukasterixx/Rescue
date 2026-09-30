@@ -23,6 +23,9 @@
 
 # WHICH WALKING POLICY THE SIM LOADS.
 #
+# Unless `--policy DIR` names an exported one (policy.pt + params/deploy.yaml, such as
+# policies/go2_policies_2026-09-18/flat or .../rough): see rescue_sim/README.md, "Walking policies".
+#
 # A FLAT-GROUND POLICY, installed 2026-09-15: `go2_rescue_flat/2026-09-15_08-09-04_abl_FlatP2D`,
 # model_1999. The maze is flat now (`terrain_cfg.py`, `elevation_chance=0.0`) because no policy
 # trained for this robot climbs its stairs reliably; `training/README.md` has the evidence.

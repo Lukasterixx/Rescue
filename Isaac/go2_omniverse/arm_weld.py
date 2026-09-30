@@ -28,6 +28,14 @@ from dataclasses import dataclass
 
 from pxr import Gf, PhysxSchema, Usd, UsdGeom, UsdPhysics
 
+# Where the arm's base_link (the centre of its base's bottom face) sits in the Go2's base_link frame, metres.
+# The D1 bolts to the EDU's two rails through the rails' own screw positions: its holes are 13 cm apart along
+# the rail on the real arm (measured by Lukas, 2026-09-30), and the rails' screws are 131.0 mm apart, at
+# x = -84.5 and +46.6 mm (Unitree's rail CAD), so the base is centred at their midpoint, x = -19 mm. The rails'
+# tops are at z = 85.5 mm, which is where the base's bottom face rests. Was (0, 0, 0.08), ARM_MOUNT_Z, which had
+# no measurement behind it and left the base 5.5 mm inside the rails. Same value as D1Training's weld.py.
+D1_MOUNT_POS = (-0.019, 0.0, 0.0855)
+
 
 @dataclass
 class WeldResult:
@@ -245,16 +253,14 @@ def build_welded_robot_usd(
     go2_usd_path: str,
     d1_urdf_path: str,
     out_usd_path: str,
-    mount_pos: tuple[float, float, float] = (0.0, 0.0, 0.08),
+    mount_pos: tuple[float, float, float] = D1_MOUNT_POS,
     go2_base_link: str = "base",
     d1_base_link: str = "base_link",
     arm_mass_kg: float | None = None,
 ) -> WeldResult:
     """Compose go2.usd + d1.usd into one articulation.
 
-    `mount_pos` is the arm base's offset from the Go2's base link, in metres.
-    It matches Rescue's ARM_MOUNT_Z so the reach limits and IK targets ported
-    from there stay meaningful.
+    `mount_pos` is the arm base's offset from the Go2's base link, in metres; see D1_MOUNT_POS.
     """
     os.makedirs(os.path.dirname(out_usd_path), exist_ok=True)
     d1_usd_path = os.path.join(os.path.dirname(out_usd_path), "d1.usd")

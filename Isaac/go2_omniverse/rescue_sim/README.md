@@ -9,7 +9,8 @@ cd ~/Rescue/Isaac/go2_omniverse
 ./run_sim.sh --level stairs                # clear stairs and pallet climb
 ./run_sim.sh --level stair_debris          # debris stairs, red braces and pallet climb
 ./run_sim.sh --level ramps_obstacles       # sloped ramps with rotating slip disks and pinch points
-./run_sim.sh --headless --smoke-steps 800  # load every level, lie down and stand up, then exit
+./run_sim.sh --headless --smoke-steps 800  # load every level, lie down, stand up and walk, then exit
+./run_sim.sh --policy policies/go2_policies_2026-09-18/rough  # walk with an exported policy (see Walking policies)
 ./run_sim.sh --help                        # every option
 ```
 
@@ -79,6 +80,41 @@ Scripts can do everything the window does through `/sim/level` (std_msgs/String)
 
 **The viewport is yours.** Nothing moves it except one look at each level as it loads. To follow the robot, set Follow Mode to "Asset Root" in the IsaacLab tab's Viewer Settings. The old chase camera is gone.
 
+## Walking policies
+
+By default the legs are walked by the rsl_rl checkpoint `agent_cfg.py` names: the 2026-09-15 flat policy. That file's header has its measurements and the rollbacks. `--policy DIR` walks them with an exported policy instead. `DIR` holds `policy.pt` (TorchScript) and `params/deploy.yaml`, and is absolute or relative to this directory:
+
+```bash
+./run_sim.sh --policy policies/go2_policies_2026-09-18/flat    # 45 wide: IMU, joints, command, last action
+./run_sim.sh --policy policies/go2_policies_2026-09-18/rough   # 232 wide: the same, plus a camera-masked height scan
+```
+
+`policies/go2_policies_2026-09-18/` is the Go2_RL_workflow project's export of 2026-09-18, exactly as it came. Its README says what each policy was trained on and what it expects. Neither has been validated on hardware. The rough one reached terrain level 6.12 of 8 (about 13 cm cubes) and, by that README, struggles above about 15 cm.
+
+The observation is built from the policy's own contract (`exported_policy.py`, `env_cfg.apply_exported_policy`), not from the sim's 235-wide layout:
+- **The terms** come in the contract's `observation_order`, each clipped and then scaled as recorded. The flat policy scales the gyro by 0.2 and the joint velocities by 0.05. The rough one scales nothing. Neither reads `base_lin_vel`.
+- **The velocity command** is clamped to the envelope it trained in: ±1.5 on each axis for flat, ±1.0 for rough. The keys' 1.0 is inside both. Commands from `robot0/cmd_vel` are clamped the same way.
+- **The rough policy's height scan** is moved to where its training had it, centred 0.6 m ahead (from `params/env.yaml`). It is read through a camera mask: cells a forward D435i could not see, and rays that hit nothing, read the contract's `unobserved_value` (0.0). The mask's code is not in the bundle, so it is rebuilt from the bundle README's numbers: a camera at (0.28, 0, 0.10) m pitched 30° down, 89.44° × 58.24°, 0.3–3.0 m. On flat ground it leaves 97 of 187 cells visible, as that README says. Walls are not removed from this scan, as they are for the sim's own policy, because this policy never trained with that.
+- **No action clip** from `agent_cfg.py`: neither policy trained with one. The flat policy's own ±100 sits on its action term.
+
+Before the policy gets the legs, the sim checks that it runs them as trained. If anything differs, it stops and lists what:
+- the leg terms in Isaac Lab order: the four hips (FL, FR, RL, RR), then the thighs, then the calves;
+- the default pose;
+- kp 25 and kd 0.5;
+- 50 Hz;
+- the observation width;
+- the action scale.
+
+The motor is already the one both trained with, Unitree's Go2 HV curve (`go2_actuators.py`). The startup log's `[policy]` lines say what was loaded.
+
+These differ from their training:
+- **The arm.** Both trained on the bare Go2; here the D1 adds 3.15 kg on the trunk. The sim's own policy also trained without it and walks the welded robot well.
+- **Actuator delay.** The flat policy trained with 0–4 physics steps of random delay. The sim has none, which is inside that range.
+- **Noise.** Training added observation noise; the sim adds none, as for its own policy.
+- **The rough policy's mask** is our reading of that README in two places: the camera turns with the whole trunk (roll and pitch too), and its range is depth along the optical axis. On flat ground either reading gives the same 97 cells; on rough ground the edges of the view can differ.
+
+Friction (0.8 static, 0.6 dynamic) is inside both policies' training ranges.
+
 ## The arm
 
 **Nothing in the sim drives the arm.** It starts folded at the rest pose D1Training measured on the real D1 (F-023). Joint2 and Joint3 lie on their limits: the upper arm is laid back along the dog and the forearm is folded over it. The arm stays there until something tells it otherwise.
@@ -108,7 +144,7 @@ What the arm does with a command is D1Training's model of the real one (`d1_mode
 | funcode 2 mode 1 | Slews at a fifth of mode 0's speed (F-031) | The same, speed only |
 | Release (funcode 5 mode 0) | The drives go limp and the arm falls (F-028) | The same; the next motion command re-energises it from where it fell |
 | Enable, power off | Enable is implicit; power off is ignored (F-022) | The same |
-| Weld, mass | 3.152 kg at (0, 0, 0.08) on the trunk | The same (`arm_weld.py`, from D1Training's `weld.py`); 8/4 solver iterations, self-collisions on |
+| Weld, mass | 3.152 kg bolted on the rails, 13 cm hole spacing, at (-0.019, 0, 0.0855) on the trunk, on the base measured on the arm (`d1_arm/measured_base.py`: 126 mm across, Joint1 at 76 mm) | The same (`arm_weld.py`, from D1Training's `weld.py`); 8/4 solver iterations, self-collisions on |
 
 Three things differ from the real arm, on purpose:
 - **It starts energised, holding its rest.** The real arm rests limp on its stops until the first motion command. Held, the folded arm cannot flop about while the dog walks.
@@ -161,7 +197,7 @@ Slow is safe for the arm. Its 10 Hz command hold counts sim time, and the VIP-Re
 ## Checked, and not
 
 **Checked on 2026-09-18:**
-- **Unit tests.** `python -m unittest discover -s rescue_sim/tests -t .` runs 40 of them: the firmware through its wire protocol, the levels and the window's rows, the posture ramp, and starting and stopping the arm bridge. They include parity with D1Training on fixed inputs (`tests/fixtures/d1training.json`, written by `tests/make_fixtures.py` from D1Training 5e19028): the planner's trajectories, the calibration's camera model, the mount, the depth noise and the case registration.
+- **Unit tests.** `python -m unittest discover -s rescue_sim/tests -t .` runs 53 of them (with the conda python, which has torch): the firmware through its wire protocol, the levels and the window's rows, the posture ramp, starting and stopping the arm bridge, and the exported policies' contracts, camera mask and refusals. They include parity with D1Training on fixed inputs (`tests/fixtures/d1training.json`, written by `tests/make_fixtures.py` from D1Training 5e19028): the planner's trajectories, the calibration's camera model, the mount, the depth noise and the case registration.
 - **Smoke run with all twenty levels.** `--smoke-steps 1100 --arm-bridge off`, headless and again in a window, loaded every level, each within 5 cm of its start, and passed, at 0.57× real time headless. It asks the cup demo to stand up and checks that it stays lying. Then it goes back to the first lane, lies down, stands up and walks. It turns the wrist light on for the maze. `--smoke-shots DIR` saves the wrist camera's image after each load, and in a window the viewport and the whole window too. PhysX cooked every slip disk's hull for the GPU.
 - **The level window,** from those window captures: in the default window's narrow dock beside Stage, single-level arenas are full-width buttons and the K-Rails, stepfields, ramps, alleys and stairs rows show all their setting buttons, the loaded one highlighted.
 - **The slip disks' physics,** in a probe on the GPU pipeline at the sim's 5 ms step: a disk stays seated, turns when pushed across its radius past its seat's friction, holds against a push along it, and lifts only the bolt's 5 mm. `../competition/README.md` has the numbers.
@@ -169,8 +205,22 @@ Slow is safe for the arm. Its 10 Hz command hold counts sim time, and the VIP-Re
 - **The cup pick end to end, as the robot runs it.** This is the unchanged C++ cup pick (`cup_pick_launch.py robot:=sim`), through `arm_bridge.py --sim` with the team's D1 driver. It found the cup from the survey look, planned an outside grasp and lifted it **11.9 cm** by `/sim/cup_pose`, in 22.7 s of sim time.
 - **`ArmToPose` and `ArmStow`.** They moved the arm to the wall scanner's shape, aimed at 0 and at 1 rad, and folded it back each time.
 
+**Checked on 2026-09-19, the exported policies:**
+- **The bundles.** The TorchScript and ONNX exports of both policies agree to 4e-6 on random inputs. At the default pose with a zero command, the largest action is 1.0 (flat) and 1.9 (rough), inside the bundle README's sanity check of about 1–2.
+- **Smoke runs.** `--smoke-steps 1100 --arm-bridge off`, headless, once for each policy and once for the sim's own. Every run passed: all twenty levels loaded, and the robot stood up and walked. The smoke run now ends with 3 s of walking at 0.5 m/s on the gravel lane; the robot must stay on its feet, and the run reports how far it got:
+
+  | Policy | Forward in 4.7 s | Sideways | Largest action |
+  | --- | --- | --- | --- |
+  | The sim's own (`agent_cfg.py`) | 1.53 m | +0.10 m | 5.66 |
+  | `go2_policies_2026-09-18/flat` | 1.31 m | −0.04 m | 4.94 |
+  | `go2_policies_2026-09-18/rough` | 1.81 m | +0.23 m | 5.89 |
+
+  The time includes getting going from a stand. The runs shared the GPU with another job, at 0.32× real time.
+- **The rough policy's scan in the sim.** At the gravel spawn, 0.42 m above the floor, it saw 99 of 187 cells, exactly what the rebuilt mask gives at that height offline. Had the grid not moved 0.6 m ahead, it would have seen 33.
+
 **Not validated:**
 - The gait with the arm's drives and solver settings changed to D1Training's. The walking policy was trained with the stock ones; the smoke run shows it standing and walking, not how well it walks.
+- The exported policies anywhere but the gravel lane's start. The rough one's reason to exist is terrain: the stepfields, ramps and pallets are where it should do better than the flat policies, and whether it does is untested.
 - The wall scanner in a full mission.
 - Anything on the real robot.
 - Gravel behaviour; see `../competition/README.md`.
@@ -188,4 +238,5 @@ Slow is safe for the arm. Its 10 Hz command hold counts sim time, and the VIP-Re
 | `bridge.py` | VIP-Rescue's arm bridge, started and stopped with the sim |
 | `realsense.py`, `camera_asset.py`, `cup_asset.py` | The camera model, mount, depth noise and ROS publisher, the case, and the cup, from D1Training |
 | `ros_io.py` | The ROS node, the lidar, the IMU |
+| `exported_policy.py`, `deploy_contract.py` | `--policy`: an exported policy's bundle, its checks, its height scan and camera mask; the bundle's own contract reader, verbatim |
 | `assets/` | The calibration, the mount, the D435 case mesh and the cup model, with their licences |
