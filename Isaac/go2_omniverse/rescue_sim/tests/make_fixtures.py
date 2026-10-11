@@ -24,7 +24,9 @@ def main(root: str):
     from demos.cup.pick_demo import camera, realsense
     from demos.cup.pick_demo import camera_body
 
-    commit = subprocess.run(["git", "-C", str(root), "rev-parse", "--short", "HEAD"], capture_output=True,
+    # `--dirty`: a fixture written from uncommitted D1Training work says so (2026-10-11: F-138's CAD arm and the
+    # 3.33 N*m elbow were in D1Training's working tree, not yet in a commit).
+    commit = subprocess.run(["git", "-C", str(root), "describe", "--always", "--dirty"], capture_output=True,
                             text=True).stdout.strip()
     joints = [f"Joint{i}" for i in range(1, 7)]
     plan = motor_model.arm_trajectory("measured")

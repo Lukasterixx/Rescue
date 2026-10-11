@@ -305,7 +305,7 @@ D1_GRIPPER_JOINTS = d1.GRIPPER_JOINT_NAMES  # Joint7_1 / Joint7_2
 #     loop and holds the angle.
 #
 # Raising these buys tracking, never strength: PhysX still clamps each joint at
-# its published effort limit (3.3 Nm on J0/J1, 1.7 Nm on J2-J5).
+# its URDF effort limit (3.3 Nm on J0, 3.33 on J1/J2, 1.7 on J3-J5; d1_arm/d1.urdf).
 #
 # Teleport keeps the original numbers so that mode behaves exactly as it always
 # has. Both fixes are measured in the D1Training repo.

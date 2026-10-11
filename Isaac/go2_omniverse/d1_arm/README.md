@@ -21,6 +21,13 @@ tree.
 | 5 | `Joint6` | revolute | ±135° (wrist yaw) |
 | 6 | `Joint7_1` + `Joint7_2` | prismatic | the jaw, −19.8 (pads touching) to 50.2 (open) on the wire |
 
+The base is the one measured on the real arm (`measured_base.py`: 126 mm across, Joint1 76 mm up, holes 130 mm
+apart along the rails and 58 mm across them). Above Joint1 the joint origins are Unitree's D1-550 CAD's (D1Training
+F-138, 2026-10-09): the shoulder 54.8 mm above Joint1, the upper arm 270.0 mm, the forearm 204.67 mm from the elbow
+to Joint5, the closed fingertips 206.38 mm past Joint5. Joint2 and Joint3 are limited at 3.33 N·m, as Unitree's
+D1-550 URDF has them (not measured). `d1.urdf`, `measured_base.py` and `meshes/base_link_measured.STL` are
+byte-identical with D1Training's (copied 2026-10-11 from its working tree at 054983a).
+
 Reach 550 mm, payload 500 g, 6 DOF plus gripper. The end-effector body is `Link6`, and the wrist RealSense mounts
 there.
 

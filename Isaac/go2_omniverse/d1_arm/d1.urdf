@@ -5,8 +5,19 @@
 <robot
   name="d1_description">
   <!-- base_link is the base Lukas measured on the real arm (2026-09-30): 126 mm across, 76 mm from its bottom
-       to the rotating plate, holes 130 mm apart along the rail. Unitree's base_link.STL is 105 mm, 53.3 mm, 108 mm.
-       The mesh, its centre of mass and Joint1's height all come from d1_arm/measured_base.py. -->
+       to the rotating plate, holes 130 mm apart along the rail and 58 mm across (2026-10-06). Unitree's base_link.STL is
+       105 mm, 53.3 mm, 108 x 58 mm.
+       The mesh, its centre of mass and Joint1's height all come from d1_arm/measured_base.py.
+       Above the base the links, meshes and inertials are Unitree's older d1_description. Its joint origins were moved
+       to Unitree's D1-550 CAD (2026-10-09, F-138; d1_arm/compare_cad.py prints both): Joint2 130.80 mm above the base's
+       bottom face (z 0.0563 -> 0.0548), the upper arm 270.00 (Joint3 y 0.2693 -> 0.27), the forearm's roll line 41.33
+       above the elbow (Joint4 y 0.042 -> 0.041325) and 0.50 mm off Joint1's axis (Joint3 z 0.0009 -> 0), the forearm
+       204.67 from Joint3 to Joint5 (Joint5 z 0.14018 -> 0.146973), and the closed fingertips 206.38 past Joint5 (Joint6
+       x 0.0825 -> 0.080781). Frames, axes, limits and the hand are unchanged. The hand is d1_description's: its jaws
+       are 62 mm long, the D1-550's 67, so with the tips on the CAD's its housing sits ~6 mm further out than the CAD's.
+       Effort limits: Joint2 and Joint3 3.33 N m, as the D1-550 URDF has them, since the CAD's shoulder and elbow
+       servos have identical housings (F-137); Lukas's call, 2026-10-09 (Unitree's spec table gives Joint3 1.7).
+       Not measured. Joint1 3.3 and Joint4-6 1.7 are the spec table's. -->
   <link
     name="base_link">
     <inertial>
@@ -149,7 +160,7 @@
     name="Joint2"
     type="revolute">
     <origin
-      xyz="0 0.028 0.0563"
+      xyz="0 0.028 0.0548"
       rpy="1.5708 0 -3.1416" />
     <parent
       link="Link1" />
@@ -160,7 +171,7 @@
     <limit
       lower="-1.57"
       upper="1.57"
-      effort="3.3"
+      effort="3.33"
       velocity="1.05" />
   </joint>
   <link
@@ -207,7 +218,7 @@
     name="Joint3"
     type="revolute">
     <origin
-      xyz="0 0.2693 0.0009"
+      xyz="0 0.27 0"
       rpy="0 0 0" />
     <parent
       link="Link2" />
@@ -218,7 +229,7 @@
     <limit
       lower="-1.57"
       upper="1.57"
-      effort="1.7"
+      effort="3.33"
       velocity="1.05" />
   </joint>
   <link
@@ -265,7 +276,7 @@
     name="Joint4"
     type="revolute">
     <origin
-      xyz="0.0577 0.042 -0.0275"
+      xyz="0.0577 0.041325 -0.0275"
       rpy="-1.5708 0 -1.5708" />
     <parent
       link="Link3" />
@@ -323,7 +334,7 @@
     name="Joint5"
     type="revolute">
     <origin
-      xyz="-0.0001 -0.0237 0.14018"
+      xyz="-0.0001 -0.0237 0.146973"
       rpy="1.5708 -1.5708 0" />
     <parent
       link="Link4" />
@@ -381,7 +392,7 @@
     name="Joint6"
     type="revolute">
     <origin
-      xyz="0.0825 -0.0010782 -0.023822"
+      xyz="0.080781 -0.0010782 -0.023822"
       rpy="-1.5708 0 -1.5708" />
     <parent
       link="Link5" />

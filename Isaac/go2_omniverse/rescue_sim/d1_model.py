@@ -1,6 +1,7 @@
 """The D1-550 arm as D1Training models it: limits, timing, the firmware's motion planner, and the wire.
 
-Everything here is copied from Lukas's D1Training repository (commit 5e19028), where each number was measured on
+Everything here is copied from Lukas's D1Training repository (commit 5e19028; the effort limits from 054983a's working
+tree, 2026-10-11, F-137), where each number was measured on
 the physical arm or fitted to recordings of it. The finding numbers (F-0xx) refer to D1Training's
 `results/findings.md`. Keep this file identical in substance to its sources, so a policy trained there drives an
 arm here that moves the same way:
@@ -23,8 +24,11 @@ ARM_JOINTS = [f"Joint{i}" for i in range(1, 7)]
 FINGER_JOINTS = ["Joint7_1", "Joint7_2"]
 
 # ------------------------------------------------------------------------------------------- the drives
-# Unitree D1-550 published joint torques: the first two joints 3.3 N*m, the last four 1.7.
-EFFORT_LIMIT_NM = dict(zip(ARM_JOINTS, (3.3, 3.3, 1.7, 1.7, 1.7, 1.7)))
+# Joint1 and Joint4-6: Unitree D1-550 published joint torques, 3.3 N*m, then 1.7. Joint2 and Joint3: 3.33 N*m,
+# URDF-unverified: Unitree's D1-550 URDF gives both 3.33 and its CAD's shoulder and elbow servos have identical
+# housings (D1Training F-137, Lukas's call 2026-10-09). The published table gives Joint3 1.7, which this used until
+# then. Not measured.
+EFFORT_LIMIT_NM = dict(zip(ARM_JOINTS, (3.3, 3.33, 3.33, 1.7, 1.7, 1.7)))
 # MEASURED (F-033): peak rate of a 30 deg step on each joint through funcode 2 mode 0. One controller-wide
 # ceiling, not the URDF's per-joint 1.05/1.73 (which had no source). Lower bounds, from 9 Hz samples.
 VELOCITY_LIMIT_RAD_S = dict(zip(ARM_JOINTS, (1.25, 1.29, 1.23, 1.21, 1.25, 1.25)))
