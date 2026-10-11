@@ -10,7 +10,7 @@ cd ~/Rescue/Isaac/go2_omniverse
 ./run_sim.sh --level stair_debris          # debris stairs, red braces and pallet climb
 ./run_sim.sh --level ramps_obstacles       # sloped ramps with rotating slip disks and pinch points
 ./run_sim.sh --headless --smoke-steps 800  # load every level, lie down, stand up and walk, then exit
-./run_sim.sh --policy policies/go2_policies_2026-09-18/rough  # walk with an exported policy (see Walking policies)
+./run_sim.sh --policy policies/go2_policies_2026-09-18/rough  # walk with another policy (see Walking policies)
 ./run_sim.sh --help                        # every option
 ```
 
@@ -82,19 +82,27 @@ Scripts can do everything the window does through `/sim/level` (std_msgs/String)
 
 ## Walking policies
 
-By default the legs are walked by the rsl_rl checkpoint `agent_cfg.py` names: the 2026-09-15 flat policy. That file's header has its measurements and the rollbacks. `--policy DIR` walks them with an exported policy instead. `DIR` holds `policy.pt` (TorchScript) and `params/deploy.yaml`, and is absolute or relative to this directory:
+By default (since 2026-10-12) the legs are walked by the exported K-Rail Square policy, `policies/go2_krail_2026-10-12` (`sim.py`, `DEFAULT_POLICY`). `--policy DIR` walks them with another exported policy; `DIR` holds `policy.pt` (TorchScript) and `params/deploy.yaml`, and is absolute or relative to this directory. `--policy agent_cfg` walks them with the rsl_rl checkpoint `agent_cfg.py` names, the 2026-09-15 flat policy, which was the default until then; that file's header has its measurements and its own rollbacks.
 
 ```bash
+./run_sim.sh --level square                                    # the default: 741 wide, steps, K-rails, the K-Rail Square
+./run_sim.sh --policy agent_cfg                                # the 2026-09-15 flat policy, 235 wide
 ./run_sim.sh --policy policies/go2_policies_2026-09-18/flat    # 45 wide: IMU, joints, command, last action
 ./run_sim.sh --policy policies/go2_policies_2026-09-18/rough   # 232 wide: the same, plus a camera-masked height scan
 ```
+
+`policies/go2_krail_2026-10-12/` was trained in this repository for the K-Rail Square on this sim's own robot
+(`../training/README.md`, "The K-Rail Square policy"). It steps onto and off decks and over K-rails, and went through
+the square 20 times in 20 (its README has the measurements, taken in this sim's environment). The 2026-09-18
+bundles reached the square's deck in none of 10 trials each; the `agent_cfg` policy has not been put through it.
+It reads the stock 48 terms, `base_lin_vel` included, and a full height scan at 5 cm (no camera mask).
 
 `policies/go2_policies_2026-09-18/` is the Go2_RL_workflow project's export of 2026-09-18, exactly as it came. Its README says what each policy was trained on and what it expects. Neither has been validated on hardware. The rough one reached terrain level 6.12 of 8 (about 13 cm cubes) and, by that README, struggles above about 15 cm.
 
 The observation is built from the policy's own contract (`exported_policy.py`, `env_cfg.apply_exported_policy`), not from the sim's 235-wide layout:
 - **The terms** come in the contract's `observation_order`, each clipped and then scaled as recorded. The flat policy scales the gyro by 0.2 and the joint velocities by 0.05. The rough one scales nothing. Neither reads `base_lin_vel`.
 - **The velocity command** is clamped to the envelope it trained in: ±1.5 on each axis for flat, ±1.0 for rough. The keys' 1.0 is inside both. Commands from `robot0/cmd_vel` are clamped the same way.
-- **The rough policy's height scan** is moved to where its training had it, centred 0.6 m ahead (from `params/env.yaml`). It is read through a camera mask: cells a forward D435i could not see, and rays that hit nothing, read the contract's `unobserved_value` (0.0). The mask's code is not in the bundle, so it is rebuilt from the bundle README's numbers: a camera at (0.28, 0, 0.10) m pitched 30° down, 89.44° × 58.24°, 0.3–3.0 m. On flat ground it leaves 97 of 187 cells visible, as that README says. Walls are not removed from this scan, as they are for the sim's own policy, because this policy never trained with that.
+- **The rough policy's height scan** is moved to where its training had it, centred 0.6 m ahead (from `params/env.yaml`). It is read through a camera mask: cells a forward D435i could not see, and rays that hit nothing, read the contract's `unobserved_value` (0.0). The mask's code is not in the bundle, so it is rebuilt from the bundle README's numbers: a camera at (0.28, 0, 0.10) m pitched 30° down, 89.44° × 58.24°, 0.3–3.0 m. On flat ground it leaves 97 of 187 cells visible, as that README says. Walls are not removed from this scan, as they are for the `agent_cfg` policy, because this policy never trained with that.
 - **No action clip** from `agent_cfg.py`: neither policy trained with one. The flat policy's own ±100 sits on its action term.
 
 Before the policy gets the legs, the sim checks that it runs them as trained. If anything differs, it stops and lists what:
@@ -108,7 +116,7 @@ Before the policy gets the legs, the sim checks that it runs them as trained. If
 The motor is already the one both trained with, Unitree's Go2 HV curve (`go2_actuators.py`). The startup log's `[policy]` lines say what was loaded.
 
 These differ from their training:
-- **The arm.** Both trained on the bare Go2; here the D1 adds 3.15 kg on the trunk. The sim's own policy also trained without it and walks the welded robot well.
+- **The arm.** Both trained on the bare Go2; here the D1 adds 3.15 kg on the trunk. The `agent_cfg` policy also trained without it and walks the welded robot well.
 - **Actuator delay.** The flat policy trained with 0–4 physics steps of random delay. The sim has none, which is inside that range.
 - **Noise.** Training added observation noise; the sim adds none, as for its own policy.
 - **The rough policy's mask** is our reading of that README in two places: the camera turns with the whole trunk (roll and pitch too), and its range is depth along the optical axis. On flat ground either reading gives the same 97 cells; on rough ground the edges of the view can differ.
@@ -136,7 +144,7 @@ What the arm does with a command is D1Training's model of the real one (`d1_mode
 
 | | The real D1, as D1Training measured it | Here |
 | --- | --- | --- |
-| Drives | Published torques 3.3 / 1.7 N·m, speed ceilings 1.21–1.29 rad/s (F-033) | Force drives at 4000/400 with those limits (D1Training's `d1_servo`) |
+| Drives | Torques 3.3 N·m (Joint1), 3.33 (Joint2, Joint3: Unitree's D1-550 URDF, not measured, F-137) and 1.7 (the wrist), speed ceilings 1.21–1.29 rad/s (F-033) | Force drives at 4000/400 with those limits (D1Training's `d1_servo`) |
 | Motion | The firmware plans a trapezoid to each setpoint: 10 ms dead time, 15.5 rad/s² up, 17.4 down, and each new setpoint restarts from rest (F-045) | The same planner, run every physics step, with velocity feedforward |
 | Commands | Streamed at 10 Hz | Passed to the planner at most every 100 ms of sim time, latest first |
 | Feedback | Every 111 ms, 0.1° steps (F-020) | Every 6 policy steps (120 ms, D1Training's discretisation), quantised to 0.1° |
@@ -144,7 +152,7 @@ What the arm does with a command is D1Training's model of the real one (`d1_mode
 | funcode 2 mode 1 | Slews at a fifth of mode 0's speed (F-031) | The same, speed only |
 | Release (funcode 5 mode 0) | The drives go limp and the arm falls (F-028) | The same; the next motion command re-energises it from where it fell |
 | Enable, power off | Enable is implicit; power off is ignored (F-022) | The same |
-| Weld, mass | 3.152 kg bolted on the rails, 13 cm hole spacing, at (-0.019, 0, 0.0855) on the trunk, on the base measured on the arm (`d1_arm/measured_base.py`: 126 mm across, Joint1 at 76 mm) | The same (`arm_weld.py`, from D1Training's `weld.py`); 8/4 solver iterations, self-collisions on |
+| Weld, mass | 3.152 kg bolted on the rails, holes 130 mm apart along them and 58 mm across, at (-0.019, 0, 0.0855) on the trunk, on the base measured on the arm (`d1_arm/measured_base.py`: 126 mm across, Joint1 at 76 mm); above Joint1, Unitree's D1-550 CAD lengths (F-138) | The same (`arm_weld.py`, from D1Training's `weld.py`; `d1_arm/` byte-identical with D1Training's); 8/4 solver iterations, self-collisions on. The Go2 EDU's expansion dock and its two rails are drawn on the trunk, visual only (`dock.py`) |
 
 Three things differ from the real arm, on purpose:
 - **It starts energised, holding its rest.** The real arm rests limp on its stops until the first motion command. Held, the folded arm cannot flop about while the dog walks.
@@ -197,7 +205,7 @@ Slow is safe for the arm. Its 10 Hz command hold counts sim time, and the VIP-Re
 ## Checked, and not
 
 **Checked on 2026-09-18:**
-- **Unit tests.** `python -m unittest discover -s rescue_sim/tests -t .` runs 53 of them (with the conda python, which has torch): the firmware through its wire protocol, the levels and the window's rows, the posture ramp, starting and stopping the arm bridge, and the exported policies' contracts, camera mask and refusals. They include parity with D1Training on fixed inputs (`tests/fixtures/d1training.json`, written by `tests/make_fixtures.py` from D1Training 5e19028): the planner's trajectories, the calibration's camera model, the mount, the depth noise and the case registration.
+- **Unit tests.** `python -m unittest discover -s rescue_sim/tests -t .` runs 53 of them (with the conda python, which has torch): the firmware through its wire protocol, the levels and the window's rows, the posture ramp, starting and stopping the arm bridge, and the exported policies' contracts, camera mask and refusals. They include parity with D1Training on fixed inputs (`tests/fixtures/d1training.json`, written by `tests/make_fixtures.py`, last from D1Training 054983a-dirty on 2026-10-11): the planner's trajectories, the calibration's camera model, the mount, the depth noise and the case registration.
 - **Smoke run with all twenty levels.** `--smoke-steps 1100 --arm-bridge off`, headless and again in a window, loaded every level, each within 5 cm of its start, and passed, at 0.57× real time headless. It asks the cup demo to stand up and checks that it stays lying. Then it goes back to the first lane, lies down, stands up and walks. It turns the wrist light on for the maze. `--smoke-shots DIR` saves the wrist camera's image after each load, and in a window the viewport and the whole window too. PhysX cooked every slip disk's hull for the GPU.
 - **The level window,** from those window captures: in the default window's narrow dock beside Stage, single-level arenas are full-width buttons and the K-Rails, stepfields, ramps, alleys and stairs rows show all their setting buttons, the loaded one highlighted.
 - **The slip disks' physics,** in a probe on the GPU pipeline at the sim's 5 ms step: a disk stays seated, turns when pushed across its radius past its seat's friction, holds against a push along it, and lifts only the bolt's 5 mm. `../competition/README.md` has the numbers.
@@ -217,6 +225,22 @@ Slow is safe for the arm. Its 10 Hz command hold counts sim time, and the VIP-Re
 
   The time includes getting going from a stand. The runs shared the GPU with another job, at 0.32× real time.
 - **The rough policy's scan in the sim.** At the gravel spawn, 0.42 m above the floor, it saw 99 of 187 cells, exactly what the rebuilt mask gives at that height offline. Had the grid not moved 0.6 m ahead, it would have seen 33.
+
+**Checked on 2026-10-12, the arm, the dock and the K-Rail Square policy:**
+- **The weld with D1Training's latest arm** (`d1_arm/` byte-identical with D1Training's working tree at 054983a: the
+  D1-550 CAD's joint lengths, holes 58 mm across the rail, 3.33 N·m at Joint2 and Joint3). The weld composes into
+  one 28-body articulation with the 3.152 kg mass model, and draws the expansion dock and rails on the trunk
+  (20 081 triangles, visual only). The unit tests pass (59, with the regenerated D1Training fixture and the new
+  bundle's).
+- **`policies/go2_krail_2026-10-12` is the default policy from this date** (`sim.py`, `DEFAULT_POLICY`; `--policy
+  agent_cfg` for the one before).
+- **`policies/go2_krail_2026-10-12` through the K-Rail Square**, in this sim's environment without ROS and the arm's
+  DDS link (`../training/measure_square.py`, GPU physics): 20 of 20 routes at 0.5 m/s, 10 of 10 at 0.3 and 0.8,
+  10 of 10 with the rails at 15 cm and 8 of 10 at 20 cm, none fell. Its README has the rest.
+- **Not checked: `run_sim.sh` itself.** It stops at startup on this machine: `env_isaaclab` has no `cyclonedds`,
+  which `d1_arm.D1DdsLink` imports. PyPI's only wheel for Python 3.11 is cyclonedds 11.0.1; 0.10.x (the `orbit`
+  environment has 0.10.2) has to be built against a CycloneDDS C install. Which one passed the 2026-09-18 smoke
+  run is not recorded.
 
 **Not validated:**
 - The gait with the arm's drives and solver settings changed to D1Training's. The walking policy was trained with the stock ones; the smoke run shows it standing and walking, not how well it walks.

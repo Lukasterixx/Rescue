@@ -84,3 +84,24 @@ for _arm in ("FlatP2D", "FlatNoDR", "FlatNoArm", "FlatNoAct", "FlatClear08"):
             "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:Go2RescueFlatPPORunnerCfg",
         },
     )
+
+# The K-Rail Square policy (krail_env_cfg.py): the sim's robot, decks and K-rails, exported as a `--policy` bundle.
+gym.register(
+    id="Isaac-Velocity-Rescue-KRail-Go2-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.krail_env_cfg:Go2KRailEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:Go2KRailPPORunnerCfg",
+    },
+)
+
+gym.register(
+    id="Isaac-Velocity-Rescue-KRail-Go2-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.krail_env_cfg:Go2KRailEnvCfg_PLAY",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:Go2KRailPPORunnerCfg",
+    },
+)

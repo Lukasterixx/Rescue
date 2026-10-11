@@ -1,0 +1,14 @@
+{
+ "run": "/home/victor/IsaacLab/logs/rsl_rl/go2_krail/2026-10-11_23-46-04_v2y",
+ "checkpoint": "model_5999.pt",
+ "iteration": 5999,
+ "obs_dim": 741,
+ "action_clip": 20.0,
+ "torchscript_vs_rebuilt_max_abs": 0.0,
+ "onnx_vs_rebuilt_max_abs": 4.0531158447265625e-05,
+ "sha256": {
+  "model_5999.pt": "84cf36fce9b71033f6839171c3948d7299d5ba892cadbec5a1de4d8f15d23006",
+  "policy.pt": "f33242b79a355b4c0322c62057b5626263150bfa8c0f8ae27bf0d9640a66d9c2",
+  "policy.onnx": "687e2e7081d187979153717f21b0dcb484bbcafb8828f5b728c6c882c1e760fe"
+ }
+}

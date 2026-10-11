@@ -13,7 +13,10 @@
 
 from isaaclab.utils import configclass
 
-from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, RslRlPpoAlgorithmCfg
+from isaaclab_rl.rsl_rl import (RslRlMLPModelCfg, RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, RslRlPpoAlgorithmCfg,
+                                RslRlSymmetryCfg)
+
+from ..krail_symmetry import compute_symmetric_states
 
 
 @configclass
@@ -136,3 +139,47 @@ class Go2RescueExpPPORunnerCfg(Go2RescuePPORunnerCfg):
     The clip now lives on `Go2RescuePPORunnerCfg` itself, so this class adds nothing; it is kept
     so the experiment task ids still resolve.
     """
+
+
+@configclass
+class Go2KRailPPORunnerCfg(RslRlOnPolicyRunnerCfg):
+    """The K-Rail Square policy (`krail_env_cfg.py`). Stock rough-Go2 PPO, in rsl-rl 5's actor/critic form, the critic
+    reading the uncorrupted observation group."""
+
+    num_steps_per_env = 24
+    max_iterations = 6000
+    save_interval = 100
+    experiment_name = "go2_krail"
+    # Raw actions clipped at +-20, as this package's other runs (the README's last-action feedback runaway). Isaac
+    # Lab's action-term `clip` would clip the joint TARGETS and leave the raw action, which is what feeds back, free.
+    # The exported policy clamps the same (`export_krail.py`), so the sim's last_action matches training's.
+    clip_actions = 20.0
+    obs_groups = {"actor": ["policy"], "critic": ["critic"]}
+    actor = RslRlMLPModelCfg(
+        hidden_dims=[512, 256, 128],
+        activation="elu",
+        obs_normalization=False,
+        distribution_cfg=RslRlMLPModelCfg.GaussianDistributionCfg(init_std=1.0),
+    )
+    critic = RslRlMLPModelCfg(hidden_dims=[512, 256, 128], activation="elu", obs_normalization=False)
+    algorithm = RslRlPpoAlgorithmCfg(
+        value_loss_coef=1.0,
+        use_clipped_value_loss=True,
+        clip_param=0.2,
+        entropy_coef=0.01,
+        num_learning_epochs=5,
+        num_mini_batches=4,
+        learning_rate=1.0e-3,
+        schedule="adaptive",
+        gamma=0.99,
+        lam=0.95,
+        desired_kl=0.01,
+        max_grad_norm=1.0,
+        # Every minibatch trained on as recorded and mirrored left-right (`krail_symmetry.py`): v2 turned well one
+        # way and badly the other, and swapped sides between checkpoints. On from v2's iteration 2000.
+        # The mirror loss joined at 2400: with augmentation alone the policy's mean stayed lopsided (rsl-rl's
+        # symmetry metric ~1.0, not falling) and its action noise rose 0.87 -> 1.10 in 400 iterations, the mirrored
+        # actions being unlikely under a lopsided mean. The loss pulls the mean symmetric directly.
+        symmetry_cfg=RslRlSymmetryCfg(use_data_augmentation=True, use_mirror_loss=True, mirror_loss_coeff=0.5,
+                                      data_augmentation_func=compute_symmetric_states),
+    )

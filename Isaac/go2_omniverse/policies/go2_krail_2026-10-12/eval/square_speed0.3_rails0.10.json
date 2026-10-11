@@ -1,0 +1,327 @@
+{
+ "summary": {
+  "policy": "/home/victor/Rescue/Isaac/go2_omniverse/policies/go2_krail_2026-10-12",
+  "speed": 0.3,
+  "k_rail_height": 0.1,
+  "trials": 10,
+  "success": 10,
+  "fell": 0,
+  "stage_counts": {
+   "stepped_up": 10,
+   "rail_1": 10,
+   "rail_2": 10,
+   "stepped_down": 10,
+   "done": 10
+  },
+  "mean_time_s": 27.92,
+  "steady_mean_abs_err": [
+   0.024,
+   0.011,
+   0.053
+  ],
+  "walking_speed_ratio": 1.035,
+  "turning_rate_ratio": 0.976
+ },
+ "trials": [
+  {
+   "trial": 0,
+   "success": true,
+   "fell": false,
+   "fall": null,
+   "stages": [
+    "stepped_up",
+    "rail_1",
+    "rail_2",
+    "stepped_down",
+    "done"
+   ],
+   "waypoints": 8,
+   "time_s": 27.78,
+   "max_action": 5.72,
+   "mean_abs_err": [
+    0.035,
+    0.014,
+    0.062
+   ],
+   "steady_mean_abs_err": [
+    0.025,
+    0.009,
+    0.054
+   ],
+   "walking_speed_ratio": 1.038,
+   "turning_rate_ratio": 0.98,
+   "max_height_m": 0.501,
+   "wall_s": 32.6
+  },
+  {
+   "trial": 1,
+   "success": true,
+   "fell": false,
+   "fall": null,
+   "stages": [
+    "stepped_up",
+    "rail_1",
+    "rail_2",
+    "stepped_down",
+    "done"
+   ],
+   "waypoints": 8,
+   "time_s": 28.1,
+   "max_action": 6.07,
+   "mean_abs_err": [
+    0.034,
+    0.015,
+    0.062
+   ],
+   "steady_mean_abs_err": [
+    0.025,
+    0.01,
+    0.051
+   ],
+   "walking_speed_ratio": 1.04,
+   "turning_rate_ratio": 0.984,
+   "max_height_m": 0.508,
+   "wall_s": 31.0
+  },
+  {
+   "trial": 2,
+   "success": true,
+   "fell": false,
+   "fall": null,
+   "stages": [
+    "stepped_up",
+    "rail_1",
+    "rail_2",
+    "stepped_down",
+    "done"
+   ],
+   "waypoints": 8,
+   "time_s": 28.0,
+   "max_action": 6.23,
+   "mean_abs_err": [
+    0.034,
+    0.015,
+    0.062
+   ],
+   "steady_mean_abs_err": [
+    0.024,
+    0.011,
+    0.052
+   ],
+   "walking_speed_ratio": 1.043,
+   "turning_rate_ratio": 0.979,
+   "max_height_m": 0.506,
+   "wall_s": 30.9
+  },
+  {
+   "trial": 3,
+   "success": true,
+   "fell": false,
+   "fall": null,
+   "stages": [
+    "stepped_up",
+    "rail_1",
+    "rail_2",
+    "stepped_down",
+    "done"
+   ],
+   "waypoints": 8,
+   "time_s": 27.4,
+   "max_action": 6.31,
+   "mean_abs_err": [
+    0.037,
+    0.017,
+    0.066
+   ],
+   "steady_mean_abs_err": [
+    0.026,
+    0.014,
+    0.056
+   ],
+   "walking_speed_ratio": 1.033,
+   "turning_rate_ratio": 0.994,
+   "max_height_m": 0.503,
+   "wall_s": 30.2
+  },
+  {
+   "trial": 4,
+   "success": true,
+   "fell": false,
+   "fall": null,
+   "stages": [
+    "stepped_up",
+    "rail_1",
+    "rail_2",
+    "stepped_down",
+    "done"
+   ],
+   "waypoints": 8,
+   "time_s": 27.76,
+   "max_action": 5.69,
+   "mean_abs_err": [
+    0.034,
+    0.014,
+    0.06
+   ],
+   "steady_mean_abs_err": [
+    0.025,
+    0.011,
+    0.052
+   ],
+   "walking_speed_ratio": 1.036,
+   "turning_rate_ratio": 0.996,
+   "max_height_m": 0.51,
+   "wall_s": 32.5
+  },
+  {
+   "trial": 5,
+   "success": true,
+   "fell": false,
+   "fall": null,
+   "stages": [
+    "stepped_up",
+    "rail_1",
+    "rail_2",
+    "stepped_down",
+    "done"
+   ],
+   "waypoints": 8,
+   "time_s": 28.14,
+   "max_action": 6.33,
+   "mean_abs_err": [
+    0.032,
+    0.014,
+    0.062
+   ],
+   "steady_mean_abs_err": [
+    0.023,
+    0.01,
+    0.054
+   ],
+   "walking_speed_ratio": 1.022,
+   "turning_rate_ratio": 0.977,
+   "max_height_m": 0.489,
+   "wall_s": 31.2
+  },
+  {
+   "trial": 6,
+   "success": true,
+   "fell": false,
+   "fall": null,
+   "stages": [
+    "stepped_up",
+    "rail_1",
+    "rail_2",
+    "stepped_down",
+    "done"
+   ],
+   "waypoints": 8,
+   "time_s": 28.08,
+   "max_action": 7.1,
+   "mean_abs_err": [
+    0.034,
+    0.013,
+    0.06
+   ],
+   "steady_mean_abs_err": [
+    0.023,
+    0.01,
+    0.049
+   ],
+   "walking_speed_ratio": 1.041,
+   "turning_rate_ratio": 0.955,
+   "max_height_m": 0.509,
+   "wall_s": 32.1
+  },
+  {
+   "trial": 7,
+   "success": true,
+   "fell": false,
+   "fall": null,
+   "stages": [
+    "stepped_up",
+    "rail_1",
+    "rail_2",
+    "stepped_down",
+    "done"
+   ],
+   "waypoints": 8,
+   "time_s": 27.94,
+   "max_action": 6.44,
+   "mean_abs_err": [
+    0.036,
+    0.016,
+    0.068
+   ],
+   "steady_mean_abs_err": [
+    0.027,
+    0.011,
+    0.058
+   ],
+   "walking_speed_ratio": 1.019,
+   "turning_rate_ratio": 0.971,
+   "max_height_m": 0.499,
+   "wall_s": 31.1
+  },
+  {
+   "trial": 8,
+   "success": true,
+   "fell": false,
+   "fall": null,
+   "stages": [
+    "stepped_up",
+    "rail_1",
+    "rail_2",
+    "stepped_down",
+    "done"
+   ],
+   "waypoints": 8,
+   "time_s": 27.92,
+   "max_action": 5.57,
+   "mean_abs_err": [
+    0.034,
+    0.014,
+    0.063
+   ],
+   "steady_mean_abs_err": [
+    0.023,
+    0.009,
+    0.053
+   ],
+   "walking_speed_ratio": 1.043,
+   "turning_rate_ratio": 0.96,
+   "max_height_m": 0.509,
+   "wall_s": 31.3
+  },
+  {
+   "trial": 9,
+   "success": true,
+   "fell": false,
+   "fall": null,
+   "stages": [
+    "stepped_up",
+    "rail_1",
+    "rail_2",
+    "stepped_down",
+    "done"
+   ],
+   "waypoints": 8,
+   "time_s": 28.1,
+   "max_action": 5.53,
+   "mean_abs_err": [
+    0.032,
+    0.016,
+    0.061
+   ],
+   "steady_mean_abs_err": [
+    0.022,
+    0.013,
+    0.05
+   ],
+   "walking_speed_ratio": 1.038,
+   "turning_rate_ratio": 0.964,
+   "max_height_m": 0.507,
+   "wall_s": 32.3
+  }
+ ]
+}

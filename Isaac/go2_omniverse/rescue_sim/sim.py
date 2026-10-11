@@ -23,6 +23,11 @@ HERE = Path(__file__).resolve().parent            # rescue_sim/
 SIM_DIR = HERE.parent                             # Isaac/go2_omniverse: the policy logs, the D1 URDF, d1_sdk
 GENERATED = HERE / "generated"
 DRIVE_KEYS = ("W", "A", "S", "D", "Q", "E")
+# The walking policy the sim loads unless `--policy` names another: the K-Rail Square policy, trained on this sim's
+# robot (`policies/go2_krail_2026-10-12/README.md`). `--policy agent_cfg` walks with agent_cfg.py's rsl_rl checkpoint,
+# the default until 2026-10-12.
+DEFAULT_POLICY = "policies/go2_krail_2026-10-12"
+AGENT_CFG_POLICY = "agent_cfg"
 
 
 def parse_args(argv=None):
@@ -43,10 +48,11 @@ def parse_args(argv=None):
                         help="never run faster than real time (default on): the arm's 10 Hz bridge runs on "
                              "the wall clock")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--policy", default=None, metavar="DIR",
-                        help="walk with an exported policy instead of agent_cfg.py's checkpoint: a directory holding "
-                             "policy.pt and params/deploy.yaml, absolute or relative to the sim directory, e.g. "
-                             "policies/go2_policies_2026-09-18/flat or .../rough")
+    parser.add_argument("--policy", default=DEFAULT_POLICY, metavar="DIR|agent_cfg",
+                        help="the walking policy: an exported one, a directory holding policy.pt and params/deploy.yaml, "
+                             "absolute or relative to the sim directory (default %(default)s, the K-Rail Square "
+                             "policy; others: policies/go2_policies_2026-09-18/flat or .../rough), or 'agent_cfg' "
+                             "for agent_cfg.py's rsl_rl checkpoint, the default before 2026-10-12")
     # The competition's geometry.
     from competition.build import add_geometry_args
 
@@ -227,7 +233,7 @@ def run(args, simulation_app):
 
     GENERATED.mkdir(parents=True, exist_ok=True)
     exported = None
-    if args.policy:
+    if args.policy and args.policy != AGENT_CFG_POLICY:
         from rescue_sim.exported_policy import Bundle, ExportedPolicyError, resolve
 
         try:

@@ -21,10 +21,12 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-# WHICH WALKING POLICY THE SIM LOADS.
+# THE rsl_rl CHECKPOINT `--policy agent_cfg` WALKS WITH.
 #
-# Unless `--policy DIR` names an exported one (policy.pt + params/deploy.yaml, such as
-# policies/go2_policies_2026-09-18/flat or .../rough): see rescue_sim/README.md, "Walking policies".
+# Since 2026-10-12 the sim's default walking policy is the exported K-Rail Square policy,
+# policies/go2_krail_2026-10-12 (rescue_sim/sim.py, DEFAULT_POLICY); `--policy DIR` names any other
+# exported one. This file is the policy the sim loaded by default before that, and still loads with
+# `--policy agent_cfg`: see rescue_sim/README.md, "Walking policies".
 #
 # A FLAT-GROUND POLICY, installed 2026-09-15: `go2_rescue_flat/2026-09-15_08-09-04_abl_FlatP2D`,
 # model_1999. The maze is flat now (`terrain_cfg.py`, `elevation_chance=0.0`) because no policy

@@ -57,6 +57,8 @@ Registered task ids (after the next Isaac Lab start):
   Isaac-Velocity-Rescue-Unitree-Go2-Play-v0       watch it on the stair terrain
   Isaac-Velocity-Rescue-Unitree-Go2-Flat-v0       reward-set checks on a plane
   Isaac-Velocity-Rescue-Unitree-Go2-Flat-Play-v0  posture / gait / turn probes
+  Isaac-Velocity-Rescue-KRail-Go2-v0              the K-Rail Square policy (README, "The K-Rail Square policy")
+  Isaac-Velocity-Rescue-KRail-Go2-Play-v0         watch it on decks and K-rails
 
 Verify without training:
   cd "$ISAACLAB_PATH" && ./isaaclab.sh -p scripts/environments/list_envs.py | grep Rescue

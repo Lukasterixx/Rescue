@@ -1,0 +1,32 @@
+{
+ "policy": "/home/victor/Rescue/Isaac/go2_omniverse/policies/go2_krail_2026-10-12",
+ "terrain": "steps_up",
+ "difficulty": null,
+ "seconds": 12.0,
+ "results": {
+  "fwd_0.5": {
+   "command": [
+    0.5,
+    0.0,
+    0.0
+   ],
+   "mean_velocity": [
+    0.508,
+    0.001,
+    -0.004
+   ],
+   "abs_err": [
+    0.032,
+    0.015,
+    0.066
+   ],
+   "fell": 0,
+   "of": 32,
+   "ratio": 1.016,
+   "drift_mps": null,
+   "climbed": 32,
+   "climbed_and_upright": 32,
+   "max_rise_m": 0.613
+  }
+ }
+}

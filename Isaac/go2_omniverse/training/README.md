@@ -535,6 +535,103 @@ model_1999), copied into `../logs/rsl_rl/` and selected in `../agent_cfg.py`, wh
 its numbers and the rollbacks. Chosen over "no arm" for tracking accuracy (turns 99 % at 0.5 and
 1.0 rad/s against 124 / 109 %).
 
+## The K-Rail Square policy (2026-10-11)
+
+A new task beside the ones above, for one arena: the **K-Rail Square** (`../competition/geometry.py`,
+`square_lane`). The robot starts on the hall floor, steps up 12.2 cm onto a 2.4 m framed deck through an open
+half-edge, crosses two 10 cm K-rails (22.2 cm above the floor) round the crate in the middle, and steps down off the
+far edge. Task ids `Isaac-Velocity-Rescue-KRail-Go2-v0` / `-Play-v0`; `go2_rescue/krail_env_cfg.py` has the design
+and why each part is there. In short:
+
+| | `go2_rescue` (above) | `krail` |
+|---|---|---|
+| reward set | P2Dingo's Spot rewards | stock Isaac Lab rough Go2's, tracking in the yaw frame, plus a sharp (std 0.2) tracking pair and a stand-still term; nothing that charges an attempt at a step |
+| robot | Go2 + D1 held at zero, or bare | the sim's own (`rescue_sim.env_cfg.robot_cfg`): arm folded at its measured rest, force drives, 8/4 solver iterations, self-collisions on |
+| ground | stairs, slopes, boxes, rough | decks 3-24 cm with K-rails on and between them (45 %), stairs both ways with 60 cm treads (25 %), boxes, rough, slopes, flat (`go2_rescue/krail_terrain.py`) |
+| height scan | 1.6 x 1.0 m at 10 cm (187) | the same area at 5 cm (693): a 10 cm rail is two rows of rays, not one |
+| commands | held, in-place turns, stands | the same, plus 50 % heading-controlled walkers; +-1.0 / +-0.8 m/s, +-1.5 rad/s, 5-10 s |
+| symmetry | none | every minibatch also trained mirrored left-right, with a mirror loss (`go2_rescue/krail_symmetry.py`) |
+| terrain ladder | path length, or displacement of straight walkers | progress along the command while it is straight (`go2_rescue/krail_mdp.py`) |
+| result | rsl_rl checkpoint, 235 wide, `agent_cfg.py` | exported bundle, 741 wide, `--policy` |
+
+Two things found on the way, which apply to anything trained on the sim's robot:
+
+- **A front leg hits the head in a turn.** With the sim's self-collisions on, `Head_lower` took up to 264 N while
+  the 2026-09-18 rough policy turned on the spot at 1 rad/s on flat ground; the trunk took none. A termination on
+  head contact (the first 600 iterations here had one) ends episodes for turning. Only the trunk terminates now.
+- **Isaac Lab's action `clip` clips the joint targets**, not the action. The raw action, which is what feeds back as
+  `last_action`, stays unbounded. The +-20 clip that stops the feedback runaway (above) belongs in the runner's
+  `clip_actions`, and the exported policy applies the same clamp so the sim's `last_action` matches.
+
+### The runs (2026-10-11 to 12), and what each change bought
+
+Four measurements drove every change: the K-Rail Square route in the sim's own environment (`measure_square.py`,
+10 trials at 0.5 m/s), held commands on flat ground (`measure_tracking.py`, 8 robots a command), and two climbing
+probes: 24 robots held at 0.5 m/s in the pit of the up-stairs at difficulty 0.3 (9 cm risers) and 0.45 (12 cm),
+and on deck-and-rail tiles at 0.45 (12.5 cm decks, 13 cm rails, each +-15 %). CPU physics for all of them (the GPU was
+training); the robot is the nominal one.
+
+**The baselines** do not reach the deck. In the square, `go2_policies_2026-09-18/rough` and `/flat` stopped at, or
+fell at, the 12.2 cm step in 10 of 10 trials each.
+
+**v1** (stock rewards plus a -10 termination penalty, a 1 rad tilt termination, stumble, shin-contact and
+orientation penalties): refused every step. At iteration 1500, with `Curriculum/terrain_levels` at 4.9, 0 of 24
+climbed a 9 cm riser (0.2 % of the commanded speed: they did not move), and in the square 9 of 10 stopped 0.6 m short
+of the deck. The curriculum's mean was carried by the flat, rough and slope columns. Stopped at 1650. Its first 600
+iterations also terminated on head contact, which the sim's self-collisions make a leg's job in every turn (above).
+
+**v2** (`KRailRewardsCfg`: nothing charges an attempt; a sharp tracking pair; half the robots heading-controlled;
+more up-stair pits). At 1000: 21 of 24 up 9 cm, 7 of 10 onto the square's deck; 0.3 m/s tracked at 104 % (v1: 0 %).
+At 2000: 24 of 24 up 12 cm risers, the first complete square route (1 of 10; 6 fell, high-centred on the rails).
+But turning was lopsided and swapped sides between checkpoints: left at 49-74 % and right 92 % at 1000, left
+85-100 % and right 16 % of 1 rad/s at 2000.
+
+**+ symmetry** (from 2000, `krail_symmetry.py`): mirrored minibatches. The mean stayed lopsided (rsl-rl's symmetry
+metric ~1.0) and the action noise rose 0.87 -> 1.10 in 400 iterations. **+ mirror loss** (from 2400, weight 0.5):
+the metric fell to 0.09 within ten iterations and the noise came back to 0.94. At 3000: 9 of 10 square routes, no
+falls; turns 88 % and 90 % of +-1 rad/s, but 69 % of 0.5 rad/s.
+
+**+ yaw weights** (from 3000: 1.5 and 1.0 for the two yaw terms, from 1.0 and 0.5). At 4000: 10 of 10 square
+routes, no falls; turns 99-104 % from 0.5 to 1.5 rad/s, either way. At 4000 the square with 15 cm rails went 8 of
+10 and with 20 cm 3 of 10; at 5000, 10 and 8; at 5999, 10 and 8, with no falls.
+
+**Shipped: 5999**, as `../policies/go2_krail_2026-10-12/` (its README has the full measurements, re-taken on GPU
+physics: 20 of 20 square routes at 0.5 m/s, 10 of 10 at 0.3 and 0.8, 32 of 32 up 9, 12 and 14 cm risers; on flat
+ground 100-105 % forward from 0.3 to 1.0 m/s, 90 % sideways, 102-107 % turning either way). Of 4000, 5000 and 5999
+it is the best on taller rails and on flat-ground tracking alike. Rescue's current flat policy, measured with
+`measure_bench.py` rather than this tool, tracks 95 / 97 % forward at 0.5 / 1.0 m/s and 99 % turning at 0.5 and 1.0
+rad/s. It has not been put through the square: `measure_square.py` loads exported bundles, and it is an rsl_rl
+checkpoint (the two 2026-09-18 bundles were, and reached the deck in none of 10 trials each).
+
+The config in `go2_rescue/` is the last segment's (symmetry, mirror loss and the yaw weights on). The policy came
+from the sequence above, each segment resumed from the last one's checkpoint, which restarts the terrain ladder
+from the bottom (it climbs back in ~300 iterations). A run from scratch with today's config has not been tried.
+
+### Train, export, measure
+
+```bash
+cd ~/IsaacLab
+./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/train.py \
+  --task Isaac-Velocity-Rescue-KRail-Go2-v0 --headless --num_envs 4096 --max_iterations 6000
+# ~6.2 s an iteration on an RTX 3500 Ada laptop GPU: 6000 iterations is about ten hours.
+
+python ~/Rescue/Isaac/go2_omniverse/training/export_krail.py logs/rsl_rl/go2_krail/<run> \
+  --checkpoint model_5999.pt --out ~/Rescue/Isaac/go2_omniverse/policies/go2_krail_<date>
+
+./isaaclab.sh -p ~/Rescue/Isaac/go2_omniverse/training/measure_square.py --headless \
+  --policy policies/go2_krail_<date> --trials 20 --speed 0.5 --out square.json
+./isaaclab.sh -p ~/Rescue/Isaac/go2_omniverse/training/measure_tracking.py --headless \
+  --policy ~/Rescue/Isaac/go2_omniverse/policies/go2_krail_<date> --out tracking.json      # flat
+#   ... --terrain krail --difficulty 0.45                                                   # square-height decks
+```
+
+`measure_square.py` is the acceptance test: the rescue sim's own environment (`make_env_cfg`, the hall from
+`export_scene`, the sim's checks on the bundle), driven along the course drawing's route by a nav2-like driver that
+turns on the spot when off heading and never strafes. It leaves out what needs ROS or DDS (lidar, camera, the arm's
+firmware). Pass `--device cpu` to run it beside a training run: on a GPU that is busy training, one simulated robot
+crawls. `measure_tracking.py` holds fixed commands on the training robot, nominal (no mass or CoM randomisation),
+on a plane or on K-rail tiles of one difficulty.
+
 ## Not done here
 
 - **No actuator delay.** The motor model supports one (`min_delay`/`max_delay`, in 5 ms
@@ -553,7 +650,7 @@ its numbers and the rollbacks. Chosen over "no arm" for tracking accuracy (turns
   centre, an input the policy has never seen.
 - **The per-foot ground datum is in place but unvalidated** by a full run, here or in
   P2Dingo. Its docstring in `mdp/rewards.py` has the reasoning.
-- **The arm trains folded.** Its joints are PD-held at zero and never randomised, which is
-  the pose it rides in while the dog walks. A policy robust to the arm being raised or
+- **The arm trains folded.** Its joints are PD-held at zero (at its measured rest, Joint2 and Joint3 on
+  their limits, in the K-rail task) and never randomised, which is the pose it rides in while the dog walks. A policy robust to the arm being raised or
   extended mid-walk would need the arm's position targets randomised at reset; that is
   extra machinery and not the deployment case, so it is left out.
