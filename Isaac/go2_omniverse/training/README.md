@@ -545,11 +545,11 @@ and why each part is there. In short:
 
 | | `go2_rescue` (above) | `krail` |
 |---|---|---|
-| reward set | P2Dingo's Spot rewards | stock Isaac Lab rough Go2's, tracking in the yaw frame, plus a sharp (std 0.2) tracking pair and a stand-still term; nothing that charges an attempt at a step |
+| reward set | P2Dingo's Spot rewards | stock Isaac Lab rough Go2's, tracking in the yaw frame, plus a sharp (std 0.2) tracking pair, a stand-still term and (since 2026-10-13) the stance terms below; nothing that charges an attempt at a step |
 | robot | Go2 + D1 held at zero, or bare | the sim's own (`rescue_sim.env_cfg.robot_cfg`): arm folded at its measured rest, force drives, 8/4 solver iterations, self-collisions on |
 | ground | stairs, slopes, boxes, rough | decks 3-24 cm with K-rails on and between them (45 %), stairs both ways with 60 cm treads (25 %), boxes, rough, slopes, flat (`go2_rescue/krail_terrain.py`) |
 | height scan | 1.6 x 1.0 m at 10 cm (187) | the same area at 5 cm (693): a 10 cm rail is two rows of rays, not one |
-| commands | held, in-place turns, stands | the same, plus 50 % heading-controlled walkers; +-1.0 / +-0.8 m/s, +-1.5 rad/s, 5-10 s |
+| commands | held, in-place turns, stands | the same, plus 50 % heading-controlled walkers; +-1.0 / +-0.8 m/s, +-1.5 rad/s, 5-10 s; a quarter of them stands of 1-4 s |
 | symmetry | none | every minibatch also trained mirrored left-right, with a mirror loss (`go2_rescue/krail_symmetry.py`) |
 | terrain ladder | path length, or displacement of straight walkers | progress along the command while it is straight (`go2_rescue/krail_mdp.py`) |
 | result | rsl_rl checkpoint, 235 wide, `agent_cfg.py` | exported bundle, 741 wide, `--policy` |
@@ -603,9 +603,64 @@ it is the best on taller rails and on flat-ground tracking alike. Rescue's curre
 rad/s. It has not been put through the square: `measure_square.py` loads exported bundles, and it is an rsl_rl
 checkpoint (the two 2026-09-18 bundles were, and reached the deck in none of 10 trials each).
 
-The config in `go2_rescue/` is the last segment's (symmetry, mirror loss and the yaw weights on). The policy came
-from the sequence above, each segment resumed from the last one's checkpoint, which restarts the terrain ladder
-from the bottom (it climbs back in ~300 iterations). A run from scratch with today's config has not been tried.
+The policy came from the sequence above, each segment resumed from the last one's checkpoint, which restarts the
+terrain ladder from the bottom (it climbs back in ~300 iterations).
+
+### The stance fine-tune (2026-10-12 to 13)
+
+The 5999 policy walked over the rails, but carried its weight on its front feet, and when it was stopped it stood
+on its front legs and nearly fell over. `measure_stance.py` measures that (below): on flat ground, 16 robots a case,
+GPU, it put 56-83 % of the weight on the front feet walking at 1.0 down to 0.3 m/s and 74-86 % standing after a
+walk, and every robot stopped from a forward walk lifted both rear feet, for 0.33-0.46 s and up to 21 cm, its nose
+down 10-12 deg on average and 29 at worst; in the worst robot the centre of mass reached the front feet's line. The
+sim's drive keys make it worse: W is 1.0 m/s, and letting go is an instant zero. Three things behind it: the arm
+puts the 18.2 kg robot's centre of mass 7 cm ahead of the middle of its feet in the default pose; the policy stood
+with its front feet further under it than that; and training seldom stopped it (8 % of resamples, every 100 s).
+
+Five segments, each resumed from a checkpoint of the one before, about 3,300 iterations; each added what the last
+one's measurements showed was missing (`go2_rescue/krail_env_cfg.py`, `KRailRewardsCfg`, has the terms):
+
+1. **v3s** (from 5999 to 7000): the centre of mass over the middle of the feet (-10 per m), each foot off the ground
+   while told to stand (-1), and stands on a quarter of the resamples, 1-4 s long. The weight came back over the
+   feet (52-59 % front standing, all four down) and forward tracking held at 96-100 %, but 6-8 of 8 robots still
+   lifted both rear feet when stopped, for 0.15-0.3 s. A step-by-step trace at 6500 showed it was deliberate: both
+   rear legs went up the instant the command went to zero, 16 cm for about 0.4 s, while the front legs braked.
+2. **v3b** (to 7500): the stand-still pose term from -0.5 to -0.2 (charged from a stop's first step, it pays to
+   swing both rear legs into place at once), the feet-off term to -2, and -5 for each end, front or rear, with
+   both its feet off. The rear lift went (0-3 of 8, under 0.1 s), but the robot now stood by squatting: the base
+   0.15 m above its feet, hips splayed 0.6-0.7 rad.
+3. **v3c** (to 7900): the pose term back at -0.5, and -20 per m that the base is under 0.26 m above its feet's mean
+   height (0.33 m in the default pose; over the feet rather than the ground, so a step moves it by a few cm). The
+   squat went (0.28-0.30 m); the rear lift came back on slow stops, 3 and 5 of 8 at 0.3 and 0.5 m/s.
+4. **v3d** (to 8499): the pose term held off for the first second of a stand, and -8 per end. Checkpoints traded the
+   slow stops against turning: 8300 stopped cleanly (2 and 0 of 16) but turned on the spot at 89-92 %; 8000-8499
+   turned at 96-112 % and lifted at 0-11 of 16 at 0.3 m/s. And with the weight centred by tucking the rear feet
+   forward, 8499 walked nose down, 8 deg at 0.3 m/s and 6 at 0.5, so its slow stops pitched as far as 5999's.
+5. **v3e** (to 9498): the body's tilt from the plane of the ground under it, fitted to the height scan (-10 per
+   rad^2; against the ground rather than gravity, so a climb is barely charged, where v1's orientation penalty
+   charged it in full), and -15 per end.
+
+The checkpoint was chosen from v3e's six by a GPU scan of the slow stops and the turns, 16 robots each:
+
+| v3e | both rear feet up, stopped from 0.3 / 0.5 m/s | turning on the spot, 0.5 / 1.0 / -1.0 rad/s | sideways 0.4 m/s |
+|---|---|---|---|
+| 9000 | 5 / 1 of 16 | 88 / 93 / 91 % | 84 / 84 % |
+| 9100 | 4 / 1 | 96 / 98 / 100 % | 86 / 85 % |
+| 9200 | 2 / 0 | 107 / 104 / 103 % | 85 / 82 % |
+| **9300** | **0 / 0** | **102 / 99 / 98 %** | **89 / 90 %** |
+| 9400 | 0 / 2 | 100 / 97 / 97 % | 87 / 88 % |
+| 9498 | 3 / 0 | 103 / 100 / 100 % | 84 / 82 % |
+
+**Shipped: 9300**, as `../policies/go2_krail_2026-10-13/`, the sim's default from 2026-10-13. Its README has the full
+measurements beside 5999's. In short, on the GPU: 2 and 1 of 16 robots briefly lifted both rear feet when stopped
+from 0.3 and 0.5 m/s (worst 0.22 s; the scan's run of the same checkpoint had none), none from 0.8-1.0 m/s, sideways,
+backward, turning or an arc; nose down 3-5 deg in a forward stop (worst 9); 45-62 % of the weight on the front feet
+walking and 51-56 % standing; the K-Rail Square 20 of 20 at 0.5 m/s and 10 of 10 with 20 cm rails (5999: 8); 32 of
+32 up 9, 12 and 14 cm risers. What it gave up: forward commands overshoot a little more (110 % at 0.3 m/s, 102 % at
+1.0; 5999: 105 and 100), backing up is 87 % (92), and an in-place turn drifts 0.02-0.04 m/s (0.02).
+
+The config in `go2_rescue/` is v3e's (symmetry, mirror loss, the yaw weights and the stance terms on). A run from
+scratch with it has not been tried.
 
 ### Train, export, measure
 
@@ -623,6 +678,8 @@ python ~/Rescue/Isaac/go2_omniverse/training/export_krail.py logs/rsl_rl/go2_kra
 ./isaaclab.sh -p ~/Rescue/Isaac/go2_omniverse/training/measure_tracking.py --headless \
   --policy ~/Rescue/Isaac/go2_omniverse/policies/go2_krail_<date> --out tracking.json      # flat
 #   ... --terrain krail --difficulty 0.45                                                   # square-height decks
+./isaaclab.sh -p ~/Rescue/Isaac/go2_omniverse/training/measure_stance.py --headless \
+  --policy ~/Rescue/Isaac/go2_omniverse/policies/go2_krail_<date> --out stance.json        # weight, stops
 ```
 
 `measure_square.py` is the acceptance test: the rescue sim's own environment (`make_env_cfg`, the hall from
@@ -630,7 +687,9 @@ python ~/Rescue/Isaac/go2_omniverse/training/export_krail.py logs/rsl_rl/go2_kra
 turns on the spot when off heading and never strafes. It leaves out what needs ROS or DDS (lidar, camera, the arm's
 firmware). Pass `--device cpu` to run it beside a training run: on a GPU that is busy training, one simulated robot
 crawls. `measure_tracking.py` holds fixed commands on the training robot, nominal (no mass or CoM randomisation),
-on a plane or on K-rail tiles of one difficulty.
+on a plane or on K-rail tiles of one difficulty. `measure_stance.py`, on the same robot on a plane, walks it and
+stops it dead from each of a set of commands, and reports how the weight splits between the front and rear feet,
+how far it pitches, whether both rear feet leave the ground in the stop, and how it stands afterwards.
 
 ## Not done here
 

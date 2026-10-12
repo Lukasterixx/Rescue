@@ -10,6 +10,12 @@ cd ~/Rescue/Isaac/go2_omniverse
 ./run_sim.sh --level square --policy policies/go2_krail_2026-10-12
 ```
 
+**Superseded as the sim's default on 2026-10-13** by `../go2_krail_2026-10-13`, this policy fine-tuned to carry
+its weight on all four feet. This one puts 74-86 % of the robot's weight on its front feet standing after a walk,
+and when it is stopped from a forward walk it lifts both rear feet for 0.3-0.5 s, nose down 10-12 deg
+(`eval/stance.json`, measured on 2026-10-12 with `../../training/measure_stance.py`; that README has both side by
+side).
+
 ```
 policy.pt        TorchScript: (1, 741) observation -> (1, 12) raw action, the policy mean, clamped at +-20
 policy.onnx      the same network; input `obs`, output `actions`
@@ -17,7 +23,7 @@ params/deploy.yaml   the deploy contract (`rescue_sim/deploy_contract.py`)
 params/env.yaml      the training run's environment, which the sim reads the height scanner from
 params/agent.yaml    the training run's runner config (of the last segment, see below)
 params/export.json   source run and checkpoint, sha256 of each file, TorchScript/ONNX agreement
-eval/                the measurements below, as JSON
+eval/                the measurements below, as JSON (and `stance.json`, measured for the 2026-10-13 README)
 ```
 
 The source checkpoint, for fine-tuning, is `../../logs/rsl_rl/go2_krail/2026-10-11_23-46-04_v2y/model_5999.pt`.

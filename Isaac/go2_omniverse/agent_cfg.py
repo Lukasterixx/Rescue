@@ -23,9 +23,9 @@
 
 # THE rsl_rl CHECKPOINT `--policy agent_cfg` WALKS WITH.
 #
-# Since 2026-10-12 the sim's default walking policy is the exported K-Rail Square policy,
-# policies/go2_krail_2026-10-12 (rescue_sim/sim.py, DEFAULT_POLICY); `--policy DIR` names any other
-# exported one. This file is the policy the sim loaded by default before that, and still loads with
+# Since 2026-10-12 the sim's default walking policy is the exported K-Rail Square policy, since
+# 2026-10-13 policies/go2_krail_2026-10-13 (rescue_sim/sim.py, DEFAULT_POLICY); `--policy DIR` names
+# any other exported one. This file is the policy the sim loaded by default before that, and still loads with
 # `--policy agent_cfg`: see rescue_sim/README.md, "Walking policies".
 #
 # A FLAT-GROUND POLICY, installed 2026-09-15: `go2_rescue_flat/2026-09-15_08-09-04_abl_FlatP2D`,

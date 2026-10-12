@@ -1,0 +1,398 @@
+{
+ "policy": "/home/victor/Rescue/Isaac/go2_omniverse/policies/go2_krail_2026-10-12",
+ "walk_s": 4.0,
+ "stop_s": 5.0,
+ "total_mass_kg": 18.171,
+ "results": {
+  "stand": {
+   "command": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "of": 16,
+   "fell": 0,
+   "stop": {
+    "pitch_max_deg": -0.42,
+    "pitch_max_worst_deg": -0.14,
+    "rear_air_s": 0.0,
+    "rear_air_worst_s": 0.0,
+    "rear_lift_m": 0.001,
+    "margin_min_m": 0.154,
+    "margin_min_worst_m": 0.142,
+    "stop_m": 0.0
+   },
+   "rear_air_robots": 0,
+   "rest": {
+    "front_share": 0.662,
+    "static_front_share": 0.658,
+    "pitch_deg": -0.424,
+    "com_ahead_m": 0.071,
+    "feet_down": 1.0,
+    "pose_dev_rad": 0.886,
+    "height_m": 0.311,
+    "half_width_m": 0.141
+   }
+  },
+  "stop_fwd_0.3": {
+   "command": [
+    0.3,
+    0.0,
+    0.0
+   ],
+   "of": 16,
+   "fell": 0,
+   "walk": {
+    "front_share": 0.833,
+    "pitch_deg": 0.76,
+    "com_ahead_m": 0.058,
+    "height_m": 0.312
+   },
+   "stop": {
+    "pitch_max_deg": 12.24,
+    "pitch_max_worst_deg": 18.34,
+    "rear_air_s": 0.334,
+    "rear_air_worst_s": 0.48,
+    "rear_lift_m": 0.208,
+    "margin_min_m": 0.007,
+    "margin_min_worst_m": -0.005,
+    "stop_m": 0.11
+   },
+   "rear_air_robots": 16,
+   "rest": {
+    "front_share": 0.86,
+    "static_front_share": 0.854,
+    "pitch_deg": 1.675,
+    "com_ahead_m": 0.082,
+    "feet_down": 0.296,
+    "pose_dev_rad": 3.088,
+    "height_m": 0.307,
+    "half_width_m": 0.083
+   }
+  },
+  "stop_fwd_0.5": {
+   "command": [
+    0.5,
+    0.0,
+    0.0
+   ],
+   "of": 16,
+   "fell": 0,
+   "walk": {
+    "front_share": 0.739,
+    "pitch_deg": -0.796,
+    "com_ahead_m": 0.046,
+    "height_m": 0.323
+   },
+   "stop": {
+    "pitch_max_deg": 10.25,
+    "pitch_max_worst_deg": 18.58,
+    "rear_air_s": 0.378,
+    "rear_air_worst_s": 0.88,
+    "rear_lift_m": 0.166,
+    "margin_min_m": 0.018,
+    "margin_min_worst_m": -0.002,
+    "stop_m": 0.124
+   },
+   "rear_air_robots": 16,
+   "rest": {
+    "front_share": 0.864,
+    "static_front_share": 0.848,
+    "pitch_deg": 0.737,
+    "com_ahead_m": 0.084,
+    "feet_down": 0.387,
+    "pose_dev_rad": 2.985,
+    "height_m": 0.312,
+    "half_width_m": 0.079
+   }
+  },
+  "stop_fwd_0.8": {
+   "command": [
+    0.8,
+    0.0,
+    0.0
+   ],
+   "of": 16,
+   "fell": 0,
+   "walk": {
+    "front_share": 0.622,
+    "pitch_deg": -0.749,
+    "com_ahead_m": 0.037,
+    "height_m": 0.334
+   },
+   "stop": {
+    "pitch_max_deg": 10.31,
+    "pitch_max_worst_deg": 24.04,
+    "rear_air_s": 0.459,
+    "rear_air_worst_s": 1.06,
+    "rear_lift_m": 0.167,
+    "margin_min_m": 0.031,
+    "margin_min_worst_m": -0.007,
+    "stop_m": 0.158
+   },
+   "rear_air_robots": 16,
+   "rest": {
+    "front_share": 0.819,
+    "static_front_share": 0.798,
+    "pitch_deg": -0.055,
+    "com_ahead_m": 0.081,
+    "feet_down": 0.439,
+    "pose_dev_rad": 2.493,
+    "height_m": 0.316,
+    "half_width_m": 0.089
+   }
+  },
+  "stop_fwd_1.0": {
+   "command": [
+    1.0,
+    0.0,
+    0.0
+   ],
+   "of": 16,
+   "fell": 0,
+   "walk": {
+    "front_share": 0.562,
+    "pitch_deg": -1.021,
+    "com_ahead_m": 0.023,
+    "height_m": 0.34
+   },
+   "stop": {
+    "pitch_max_deg": 11.88,
+    "pitch_max_worst_deg": 29.29,
+    "rear_air_s": 0.46,
+    "rear_air_worst_s": 0.74,
+    "rear_lift_m": 0.201,
+    "margin_min_m": 0.057,
+    "margin_min_worst_m": 0.005,
+    "stop_m": 0.166
+   },
+   "rear_air_robots": 16,
+   "rest": {
+    "front_share": 0.773,
+    "static_front_share": 0.764,
+    "pitch_deg": -1.25,
+    "com_ahead_m": 0.085,
+    "feet_down": 0.869,
+    "pose_dev_rad": 2.031,
+    "height_m": 0.32,
+    "half_width_m": 0.098
+   }
+  },
+  "stop_back_0.5": {
+   "command": [
+    -0.5,
+    0.0,
+    0.0
+   ],
+   "of": 16,
+   "fell": 0,
+   "walk": {
+    "front_share": 0.526,
+    "pitch_deg": 0.915,
+    "com_ahead_m": 0.0,
+    "height_m": 0.342
+   },
+   "stop": {
+    "pitch_max_deg": 1.4,
+    "pitch_max_worst_deg": 12.14,
+    "rear_air_s": 0.022,
+    "rear_air_worst_s": 0.36,
+    "rear_lift_m": 0.038,
+    "margin_min_m": 0.03,
+    "margin_min_worst_m": 0.002,
+    "stop_m": 0.031
+   },
+   "rear_air_robots": 1,
+   "rest": {
+    "front_share": 0.805,
+    "static_front_share": 0.802,
+    "pitch_deg": -0.379,
+    "com_ahead_m": 0.062,
+    "feet_down": 0.188,
+    "pose_dev_rad": 3.327,
+    "height_m": 0.325,
+    "half_width_m": 0.066
+   }
+  },
+  "stop_back_1.0": {
+   "command": [
+    -1.0,
+    0.0,
+    0.0
+   ],
+   "of": 16,
+   "fell": 0,
+   "walk": {
+    "front_share": 0.745,
+    "pitch_deg": 3.244,
+    "com_ahead_m": 0.054,
+    "height_m": 0.332
+   },
+   "stop": {
+    "pitch_max_deg": 2.94,
+    "pitch_max_worst_deg": 3.49,
+    "rear_air_s": 0.007,
+    "rear_air_worst_s": 0.06,
+    "rear_lift_m": 0.038,
+    "margin_min_m": 0.027,
+    "margin_min_worst_m": 0.009,
+    "stop_m": 0.088
+   },
+   "rear_air_robots": 0,
+   "rest": {
+    "front_share": 0.843,
+    "static_front_share": 0.841,
+    "pitch_deg": -1.432,
+    "com_ahead_m": 0.08,
+    "feet_down": 0.465,
+    "pose_dev_rad": 2.907,
+    "height_m": 0.319,
+    "half_width_m": 0.083
+   }
+  },
+  "stop_left_0.4": {
+   "command": [
+    0.0,
+    0.4,
+    0.0
+   ],
+   "of": 16,
+   "fell": 0,
+   "walk": {
+    "front_share": 0.631,
+    "pitch_deg": -0.481,
+    "com_ahead_m": 0.03,
+    "height_m": 0.343
+   },
+   "stop": {
+    "pitch_max_deg": 8.38,
+    "pitch_max_worst_deg": 15.86,
+    "rear_air_s": 0.089,
+    "rear_air_worst_s": 0.24,
+    "rear_lift_m": 0.172,
+    "margin_min_m": 0.065,
+    "margin_min_worst_m": 0.048,
+    "stop_m": 0.081
+   },
+   "rear_air_robots": 6,
+   "rest": {
+    "front_share": 0.772,
+    "static_front_share": 0.764,
+    "pitch_deg": -0.726,
+    "com_ahead_m": 0.082,
+    "feet_down": 0.798,
+    "pose_dev_rad": 2.504,
+    "height_m": 0.324,
+    "half_width_m": 0.081
+   }
+  },
+  "stop_left_0.8": {
+   "command": [
+    0.0,
+    0.8,
+    0.0
+   ],
+   "of": 16,
+   "fell": 0,
+   "walk": {
+    "front_share": 0.663,
+    "pitch_deg": 0.651,
+    "com_ahead_m": 0.025,
+    "height_m": 0.34
+   },
+   "stop": {
+    "pitch_max_deg": 3.62,
+    "pitch_max_worst_deg": 6.11,
+    "rear_air_s": 0.003,
+    "rear_air_worst_s": 0.02,
+    "rear_lift_m": 0.098,
+    "margin_min_m": 0.088,
+    "margin_min_worst_m": 0.064,
+    "stop_m": 0.129
+   },
+   "rear_air_robots": 0,
+   "rest": {
+    "front_share": 0.742,
+    "static_front_share": 0.732,
+    "pitch_deg": -1.356,
+    "com_ahead_m": 0.078,
+    "feet_down": 0.8,
+    "pose_dev_rad": 2.273,
+    "height_m": 0.33,
+    "half_width_m": 0.081
+   }
+  },
+  "stop_turn_1.0": {
+   "command": [
+    0.0,
+    0.0,
+    1.0
+   ],
+   "of": 16,
+   "fell": 0,
+   "walk": {
+    "front_share": 0.665,
+    "pitch_deg": 0.496,
+    "com_ahead_m": 0.041,
+    "height_m": 0.32
+   },
+   "stop": {
+    "pitch_max_deg": 0.92,
+    "pitch_max_worst_deg": 11.5,
+    "rear_air_s": 0.004,
+    "rear_air_worst_s": 0.04,
+    "rear_lift_m": 0.081,
+    "margin_min_m": 0.061,
+    "margin_min_worst_m": 0.039,
+    "stop_m": 0.025
+   },
+   "rear_air_robots": 0,
+   "rest": {
+    "front_share": 0.609,
+    "static_front_share": 0.615,
+    "pitch_deg": -3.159,
+    "com_ahead_m": 0.029,
+    "feet_down": 0.964,
+    "pose_dev_rad": 3.29,
+    "height_m": 0.334,
+    "half_width_m": 0.064
+   }
+  },
+  "stop_arc_0.5_0.5": {
+   "command": [
+    0.5,
+    0.0,
+    0.5
+   ],
+   "of": 16,
+   "fell": 0,
+   "walk": {
+    "front_share": 0.746,
+    "pitch_deg": -0.521,
+    "com_ahead_m": 0.048,
+    "height_m": 0.32
+   },
+   "stop": {
+    "pitch_max_deg": 10.85,
+    "pitch_max_worst_deg": 17.8,
+    "rear_air_s": 0.309,
+    "rear_air_worst_s": 0.5,
+    "rear_lift_m": 0.2,
+    "margin_min_m": 0.03,
+    "margin_min_worst_m": 0.005,
+    "stop_m": 0.128
+   },
+   "rear_air_robots": 15,
+   "rest": {
+    "front_share": 0.831,
+    "static_front_share": 0.808,
+    "pitch_deg": 1.026,
+    "com_ahead_m": 0.085,
+    "feet_down": 0.403,
+    "pose_dev_rad": 2.685,
+    "height_m": 0.311,
+    "half_width_m": 0.087
+   }
+  }
+ }
+}

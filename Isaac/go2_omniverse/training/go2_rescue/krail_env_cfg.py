@@ -21,14 +21,17 @@ changes what the target needs:
   rays). A 10 cm rail at 10 cm spacing is one row of rays and +-5 cm of where; at 5 cm it is two rows.
 * COMMANDS AND THE TERRAIN LADDER: `krail_mdp.py`. +-1.0 m/s forward, +-0.8 sideways, +-1.5 rad/s, held for 5-10 s;
   half the robots heading-controlled walkers for the ladder, the rest held commands, in-place turns and stands, as
-  nav2 sends them.
+  nav2 sends them. A quarter of the resamples are stands of 1-4 s, so robots are stopped from a walk often, as a
+  teleop key let go and nav2 stop them: at once.
 * TRACKING IS PAID FOR IN THE YAW FRAME (`track_lin_vel_xy_yaw_frame_exp`, `track_ang_vel_z_world_exp`): nav2 asks
   for planar velocity, and on a step the body pitches, so the body frame would charge a climbing robot for the
   climb. Yaw tracking is weighted 1.5, up from the stock Go2's 0.75, and a sharp pair (std 0.2) sits beside the
   stock pair for low speeds.
 * NOTHING CHARGES AN ATTEMPT AT A STEP that standing in front of it does not also pay: no termination penalty, no
-  tilt termination, no stumble or shin-contact penalty, no orientation penalty. Run v1 had all five and learnt to
-  stop at every riser (`KRailRewardsCfg` has the numbers).
+  tilt termination, no stumble or shin-contact penalty, no orientation penalty against gravity. Run v1 had all five
+  and learnt to stop at every riser (`KRailRewardsCfg` has the numbers).
+* THE WEIGHT IS CARRIED BY ALL FOUR FEET (run v3): the centre of mass over the middle of the feet, the body level
+  with the ground under it, and a stop on four feet, not two (`KRailRewardsCfg`, "the stance terms").
 
 THE OBSERVATION is the stock rough Go2's, term for term, with the finer scan: base linear and angular velocity,
 gravity, the command, the 12 legs' positions and velocities, the last action, and the scan, unscaled. It reads
@@ -181,6 +184,29 @@ class KRailRewardsCfg:
     YAW WEIGHTS 1.5 AND 1.0 from v2's iteration 3000 (1.0 and 0.5 before). With the K-Rail Square solved there
     (9 of 10 routes, no falls) yaw was the weak axis: on flat ground 0.5 rad/s was tracked at 69 % and 1.0-1.5 at
     88-93 %, against 99 % at 0.5 and 1.0 for the sim's current flat policy on the same robot.
+
+    THE STANCE TERMS (run v3, 2026-10-12 to 13, resumed from v2's 5999). v2's policy carried its weight on its front
+    feet and handstood when it was stopped. On flat ground (`../measure_stance.py`, 16 robots, GPU) the front pair
+    carried 56-83 % of the weight walking at 1.0 down to 0.3 m/s and 74-86 % standing after a walk, and every robot
+    stopped from a forward walk lifted both rear feet, for 0.33-0.46 s and up to 21 cm, its nose down 10-12 deg on
+    average and 29 at worst. The arm puts the 18.2 kg robot's centre of mass 7 cm ahead of the middle of its feet in
+    the default pose; v2 stood with its front feet tucked further under; and it was seldom told to stop (8 % of
+    resamples, now 25 %, `Go2KRailEnvCfg`). Each term was added for what the measurements showed next:
+
+    * `com_over_feet`: the centre of mass over the middle of the four feet, along the heading, either way.
+    * `feet_down_still` and `ends_down_still`, while the command is to stand: each foot off the ground, and each end
+      (front or rear) with both its feet off. At -1 per foot and nothing per end, nearly every forward stop still
+      lifted both rear feet, for 0.15-0.3 s. At -5 and then -8 per end, from none to most of 16 robots did on the
+      slow stops (0.3-0.5 m/s), checkpoint to checkpoint; -15 with the tilt term below.
+    * `stand_still`'s 1 s grace. Charged from a stop's first step, the quickest way back to the default pose was to
+      swing both rear legs into place at once (traced at v3's iteration 6500: both up for about 0.4 s, 16 cm, nose
+      down 11 deg). Weakening the term to -0.2 instead let the robot stand by squatting, the base 0.15 m over its
+      feet and the hips splayed 0.6-0.7 rad.
+    * `base_low`, for that squat: the base under 0.26 m above its feet's mean height (0.33 m in the default pose).
+    * `tilt_from_ground`: with the terms above, the policy centred its weight by tucking its rear feet forward and
+      walked nose down, 8 deg at 0.3 m/s and 6 at 0.5, and its slow stops pitched as far as v2's. Measured against
+      the ground's plane, not gravity, so a climb is barely charged; v1's orientation penalty, above, charged it in
+      full.
     """
 
     track_lin_vel_xy = RewTerm(func=mdp.track_lin_vel_xy_yaw_frame_exp, weight=1.5,
@@ -204,8 +230,21 @@ class KRailRewardsCfg:
                             params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=FEET),
                                     "command_name": "base_velocity", "threshold": 0.3})
     stand_still = RewTerm(func=krail_mdp.stand_still, weight=-0.5,
-                          params={"command_name": "base_velocity",
+                          params={"command_name": "base_velocity", "grace_s": 1.0,
                                   "asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINTS)})
+    base_low = RewTerm(func=krail_mdp.base_low_over_feet, weight=-20.0,
+                       params={"asset_cfg": SceneEntityCfg("robot", body_names=FEET), "min_height": 0.26})
+    tilt_from_ground = RewTerm(func=krail_mdp.tilt_from_ground, weight=-10.0,
+                               params={"asset_cfg": SceneEntityCfg("robot"),
+                                       "sensor_cfg": SceneEntityCfg("height_scanner")})
+    com_over_feet = RewTerm(func=krail_mdp.com_ahead_of_feet, weight=-10.0,
+                            params={"asset_cfg": SceneEntityCfg("robot", body_names=FEET)})
+    feet_down_still = RewTerm(func=krail_mdp.feet_off_ground_still, weight=-2.0,
+                              params={"command_name": "base_velocity",
+                                      "sensor_cfg": SceneEntityCfg("contact_forces", body_names=FEET)})
+    ends_down_still = RewTerm(func=krail_mdp.end_off_ground_still, weight=-15.0,
+                              params={"command_name": "base_velocity",
+                                      "sensor_cfg": SceneEntityCfg("contact_forces", body_names=FEET)})
 
 
 @configclass
@@ -254,7 +293,10 @@ class Go2KRailEnvCfg(LocomotionVelocityRoughEnvCfg):
         self.commands.base_velocity = krail_mdp.KRailVelocityCommandCfg(
             asset_name="robot",
             resampling_time_range=(5.0, 10.0),
-            rel_standing_envs=0.08,
+            # A stand on a quarter of the resamples, and a short one: robots are stopped from a walk often (v2 had
+            # 0.08 and 5-10 s; see KRailRewardsCfg, "the stance terms").
+            rel_standing_envs=0.25,
+            standing_time_range=(1.0, 4.0),
             rel_heading_envs=0.5,
             heading_command=True,
             heading_control_stiffness=0.5,

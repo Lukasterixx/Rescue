@@ -9,6 +9,9 @@ THE COMMAND serves two masters that pull apart, which is the lesson of this pack
 * The terrain ladder. It only means anything if a promoted robot crossed the terrain, and a robot with a held yaw
   command walks in circles. So the rest are heading-controlled: they pick a direction and walk it, which is what
   makes them meet decks and rails.
+* Stopping. A stand is a quarter of the resamples and lasts 1-4 s (`standing_time_range`), so a robot is stopped
+  from a walk about every 30 s (with v2's 8 % and 5-10 s, every 100 s), and at once, as a teleop key let go stops
+  it.
 
 THE CURRICULUM judges each robot on how far it walked ALONG ITS COMMAND while the command was straight. Every step,
 the command's direction is turned into the world frame and the robot's world velocity is projected onto it; a step
@@ -27,9 +30,9 @@ import torch
 
 from isaaclab.envs.mdp.commands import UniformVelocityCommand
 from isaaclab.envs.mdp.commands.commands_cfg import UniformVelocityCommandCfg
-from isaaclab.managers import SceneEntityCfg
+from isaaclab.managers import ManagerTermBase, SceneEntityCfg
 from isaaclab.utils import configclass
-from isaaclab.utils.math import quat_apply_inverse, yaw_quat
+from isaaclab.utils.math import quat_apply, quat_apply_inverse, yaw_quat
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -98,6 +101,12 @@ class KRailVelocityCommand(UniformVelocityCommand):
         # Commands below `min_speed` are rounded to zero: the policy should stand for them, not creep.
         small = torch.linalg.norm(self.vel_command_b[ids, :2], dim=1) < self.cfg.min_speed
         self.vel_command_b[ids[small], :2] = 0.0
+        # A stand is short, so robots are stopped from a walk often.
+        if self.cfg.standing_time_range is not None:
+            stand = ids[self.is_standing_env[ids]]
+            if len(stand):
+                self.time_left[stand] = torch.empty(len(stand), device=self.device).uniform_(
+                    *self.cfg.standing_time_range)
 
     def _update_command(self):
         super()._update_command()
@@ -117,6 +126,8 @@ class KRailVelocityCommandCfg(UniformVelocityCommandCfg):
     """Linear commands slower than this are zeroed, m/s."""
     straight_min_speed: float = 0.25
     straight_max_yaw: float = 0.3
+    standing_time_range: tuple[float, float] | None = None
+    """How long a stand lasts, s, if not `resampling_time_range`."""
 
 
 def terrain_levels_progress(
@@ -139,12 +150,121 @@ def terrain_levels_progress(
     return torch.mean(terrain.terrain_levels.float())
 
 
-def stand_still(env: ManagerBasedRLEnv, command_name: str, asset_cfg: SceneEntityCfg, lin_threshold: float = 0.1,
-                yaw_threshold: float = 0.1) -> torch.Tensor:
-    """Legs off their default pose while the command is to stand. Isaac Lab's `stand_still_joint_deviation_l1` gates
-    on the linear command alone, so it also charges an in-place turn for moving its legs."""
+class stand_still(ManagerTermBase):
+    """Legs off their default pose once the command has been to stand for `grace_s`. Isaac Lab's
+    `stand_still_joint_deviation_l1` gates on the linear command alone, so it also charges an in-place turn for
+    moving its legs. The grace is for the stop itself: charged from the first step, the quickest way back to the pose
+    is to swing both rear legs into place at once, which is the handstand."""
+
+    def __init__(self, cfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        self._still_s = torch.zeros(env.num_envs, device=env.device)
+
+    def reset(self, env_ids: Sequence[int] | None = None):
+        self._still_s[slice(None) if env_ids is None else env_ids] = 0.0
+
+    def __call__(self, env: ManagerBasedRLEnv, command_name: str, asset_cfg: SceneEntityCfg,
+                 lin_threshold: float = 0.1, yaw_threshold: float = 0.1, grace_s: float = 0.0) -> torch.Tensor:
+        cmd = env.command_manager.get_command(command_name)
+        still = (torch.linalg.norm(cmd[:, :2], dim=1) < lin_threshold) & (cmd[:, 2].abs() < yaw_threshold)
+        self._still_s = torch.where(still, self._still_s + env.step_dt, torch.zeros_like(self._still_s))
+        asset = env.scene[asset_cfg.name]
+        deviation = asset.data.joint_pos[:, asset_cfg.joint_ids] - asset.data.default_joint_pos[:, asset_cfg.joint_ids]
+        return torch.sum(torch.abs(deviation), dim=1) * (self._still_s > grace_s)
+
+
+def feet_off_ground_still(env: ManagerBasedRLEnv, command_name: str, sensor_cfg: SceneEntityCfg,
+                          threshold: float = 1.0, lin_threshold: float = 0.1, yaw_threshold: float = 0.1
+                          ) -> torch.Tensor:
+    """Feet off the ground while the command is to stand: a stop on all four feet, not on two."""
     cmd = env.command_manager.get_command(command_name)
     still = (torch.linalg.norm(cmd[:, :2], dim=1) < lin_threshold) & (cmd[:, 2].abs() < yaw_threshold)
+    sensor = env.scene.sensors[sensor_cfg.name]
+    force = torch.linalg.norm(sensor.data.net_forces_w_history[:, :, sensor_cfg.body_ids], dim=-1).max(dim=1)[0]
+    return torch.sum(force < threshold, dim=1).float() * still
+
+
+def end_off_ground_still(env: ManagerBasedRLEnv, command_name: str, sensor_cfg: SceneEntityCfg,
+                         threshold: float = 1.0, lin_threshold: float = 0.1, yaw_threshold: float = 0.1
+                         ) -> torch.Tensor:
+    """Both rear feet, or both front feet, off the ground together while the command is to stand: the robot's
+    weight all on one end, which with the rear pair up is a handstand. A trot lifts diagonal pairs, not these. The
+    feet are told apart by name (`F*` front)."""
+    cmd = env.command_manager.get_command(command_name)
+    still = (torch.linalg.norm(cmd[:, :2], dim=1) < lin_threshold) & (cmd[:, 2].abs() < yaw_threshold)
+    sensor = env.scene.sensors[sensor_cfg.name]
+    ids = sensor_cfg.body_ids if isinstance(sensor_cfg.body_ids, list) else list(range(len(sensor.body_names)))
+    front = torch.tensor([sensor.body_names[i].startswith("F") for i in ids], device=env.device)
+    force = torch.linalg.norm(sensor.data.net_forces_w_history[:, :, ids], dim=-1).max(dim=1)[0]
+    off = force < threshold
+    ends = (off | ~front).all(dim=1).float() + (off | front).all(dim=1).float()
+    return ends * still
+
+
+def base_low_over_feet(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, min_height: float) -> torch.Tensor:
+    """How far the base is below `min_height` above its feet's mean height, m; 0 at or above it. Over the feet, not
+    over the ground, so a step under some of them moves it by a few cm and nothing charges the climb."""
     asset = env.scene[asset_cfg.name]
-    deviation = asset.data.joint_pos[:, asset_cfg.joint_ids] - asset.data.default_joint_pos[:, asset_cfg.joint_ids]
-    return torch.sum(torch.abs(deviation), dim=1) * still
+    feet_z = asset.data.body_pos_w[:, asset_cfg.body_ids, 2].mean(dim=1)
+    return (min_height - (asset.data.root_pos_w[:, 2] - feet_z)).clamp(min=0.0)
+
+
+class com_ahead_of_feet(ManagerTermBase):
+    """How far the whole robot's centre of mass is from the middle of its four feet along its heading, m, either way.
+
+    The middle of the feet is their mean position: with the CoM over it, the front and rear pairs each carry half.
+    In the yaw frame, so on a slope or a step it is the horizontal offset gravity acts through. The masses are read
+    once, after the startup events have randomised the base's."""
+
+    def __init__(self, cfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        self._masses = None
+
+    def __call__(self, env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+        asset = env.scene[asset_cfg.name]
+        if self._masses is None:
+            self._masses = asset.root_physx_view.get_masses().to(env.device)
+        m = self._masses
+        com = (m.unsqueeze(-1) * asset.data.body_com_pos_w).sum(dim=1) / m.sum(dim=1, keepdim=True)
+        feet = asset.data.body_pos_w[:, asset_cfg.body_ids, :2].mean(dim=1)
+        d = com[:, :2] - feet
+        yaw = asset.data.heading_w
+        return (torch.cos(yaw) * d[:, 0] + torch.sin(yaw) * d[:, 1]).abs()
+
+
+class tilt_from_ground(ManagerTermBase):
+    """How far the body is tilted from the ground under it: the squared horizontal part of the difference between
+    the body's up axis and the normal of a plane fitted to the height scan's hits within `half_length` x
+    `half_width` of the base, both in the yaw frame (about pitch^2 + roll^2 in rad^2 for small angles). On flat ground
+    it is plain pitch and roll. On a step, a slope or a rail the reference tilts with the ground, so the climb itself
+    is barely charged, where v1's orientation penalty charged it in full (see `krail_env_cfg.KRailRewardsCfg`)."""
+
+    def __init__(self, cfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        self._sel = None
+
+    def _grid(self, sensor, half_length: float, half_width: float):
+        xy = sensor.ray_starts[0, :, :2]
+        self._sel = ((xy[:, 0].abs() <= half_length + 1e-6) & (xy[:, 1].abs() <= half_width + 1e-6)).nonzero().flatten()
+        x, y = xy[self._sel, 0], xy[self._sel, 1]
+        self._x, self._y = x - x.mean(), y - y.mean()
+        self._sxx, self._syy = (self._x ** 2).sum(), (self._y ** 2).sum()
+
+    def __call__(self, env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, sensor_cfg: SceneEntityCfg,
+                 half_length: float = 0.4, half_width: float = 0.25) -> torch.Tensor:
+        asset = env.scene[asset_cfg.name]
+        sensor = env.scene.sensors[sensor_cfg.name]
+        if self._sel is None:
+            self._grid(sensor, half_length, half_width)
+        z = sensor.data.ray_hits_w[:, self._sel, 2]
+        z = torch.where(torch.isfinite(z), z, asset.data.root_pos_w[:, 2:3] - 0.33)  # a miss reads as flat ground
+        z = z - z.mean(dim=1, keepdim=True)
+        # The grid is yaw-aligned and symmetric, so the plane's two slopes are fitted independently.
+        normal = torch.stack([-(z * self._x).sum(dim=1) / self._sxx, -(z * self._y).sum(dim=1) / self._syy,
+                              torch.ones(z.shape[0], device=z.device)], dim=1)
+        normal = normal / torch.linalg.norm(normal, dim=1, keepdim=True)
+        up_w = quat_apply(asset.data.root_quat_w, torch.tensor([0.0, 0.0, 1.0], device=z.device).expand(z.shape[0], 3))
+        yaw = asset.data.heading_w
+        c, s = torch.cos(yaw), torch.sin(yaw)
+        up_x, up_y = c * up_w[:, 0] + s * up_w[:, 1], -s * up_w[:, 0] + c * up_w[:, 1]
+        return (up_x - normal[:, 0]) ** 2 + (up_y - normal[:, 1]) ** 2

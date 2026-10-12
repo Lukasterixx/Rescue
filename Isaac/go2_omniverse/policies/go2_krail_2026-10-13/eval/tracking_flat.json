@@ -1,0 +1,320 @@
+{
+ "policy": "/home/victor/Rescue/Isaac/go2_omniverse/policies/go2_krail_2026-10-13",
+ "terrain": "flat",
+ "difficulty": null,
+ "seconds": 12.0,
+ "results": {
+  "fwd_0.3": {
+   "command": [
+    0.3,
+    0.0,
+    0.0
+   ],
+   "mean_velocity": [
+    0.33,
+    -0.0,
+    0.002
+   ],
+   "abs_err": [
+    0.033,
+    0.014,
+    0.036
+   ],
+   "fell": 0,
+   "of": 16,
+   "ratio": 1.101,
+   "drift_mps": null,
+   "climbed": 0,
+   "climbed_and_upright": 0,
+   "max_rise_m": 0.025
+  },
+  "fwd_0.5": {
+   "command": [
+    0.5,
+    0.0,
+    0.0
+   ],
+   "mean_velocity": [
+    0.532,
+    -0.001,
+    0.003
+   ],
+   "abs_err": [
+    0.034,
+    0.017,
+    0.044
+   ],
+   "fell": 0,
+   "of": 16,
+   "ratio": 1.064,
+   "drift_mps": null,
+   "climbed": 0,
+   "climbed_and_upright": 0,
+   "max_rise_m": 0.016
+  },
+  "fwd_0.8": {
+   "command": [
+    0.8,
+    0.0,
+    0.0
+   ],
+   "mean_velocity": [
+    0.83,
+    -0.0,
+    0.007
+   ],
+   "abs_err": [
+    0.033,
+    0.018,
+    0.064
+   ],
+   "fell": 0,
+   "of": 16,
+   "ratio": 1.037,
+   "drift_mps": null,
+   "climbed": 0,
+   "climbed_and_upright": 0,
+   "max_rise_m": 0.016
+  },
+  "fwd_1.0": {
+   "command": [
+    1.0,
+    0.0,
+    0.0
+   ],
+   "mean_velocity": [
+    1.024,
+    -0.001,
+    -0.001
+   ],
+   "abs_err": [
+    0.036,
+    0.016,
+    0.059
+   ],
+   "fell": 0,
+   "of": 16,
+   "ratio": 1.024,
+   "drift_mps": null,
+   "climbed": 0,
+   "climbed_and_upright": 0,
+   "max_rise_m": 0.021
+  },
+  "back_0.5": {
+   "command": [
+    -0.5,
+    0.0,
+    0.0
+   ],
+   "mean_velocity": [
+    -0.436,
+    0.0,
+    0.003
+   ],
+   "abs_err": [
+    0.064,
+    0.016,
+    0.052
+   ],
+   "fell": 0,
+   "of": 16,
+   "ratio": 0.872,
+   "drift_mps": null,
+   "climbed": 0,
+   "climbed_and_upright": 0,
+   "max_rise_m": 0.016
+  },
+  "left_0.4": {
+   "command": [
+    0.0,
+    0.4,
+    0.0
+   ],
+   "mean_velocity": [
+    0.045,
+    0.355,
+    0.012
+   ],
+   "abs_err": [
+    0.045,
+    0.046,
+    0.069
+   ],
+   "fell": 0,
+   "of": 16,
+   "ratio": 0.887,
+   "drift_mps": null,
+   "climbed": 0,
+   "climbed_and_upright": 0,
+   "max_rise_m": 0.019
+  },
+  "right_0.4": {
+   "command": [
+    0.0,
+    -0.4,
+    0.0
+   ],
+   "mean_velocity": [
+    0.046,
+    -0.358,
+    -0.02
+   ],
+   "abs_err": [
+    0.046,
+    0.043,
+    0.063
+   ],
+   "fell": 0,
+   "of": 16,
+   "ratio": 0.895,
+   "drift_mps": null,
+   "climbed": 0,
+   "climbed_and_upright": 0,
+   "max_rise_m": 0.018
+  },
+  "turn_0.5": {
+   "command": [
+    0.0,
+    0.0,
+    0.5
+   ],
+   "mean_velocity": [
+    0.021,
+    0.006,
+    0.507
+   ],
+   "abs_err": [
+    0.025,
+    0.038,
+    0.057
+   ],
+   "fell": 0,
+   "of": 16,
+   "ratio": 1.015,
+   "drift_mps": 0.023,
+   "climbed": 0,
+   "climbed_and_upright": 0,
+   "max_rise_m": 0.055
+  },
+  "turn_1.0": {
+   "command": [
+    0.0,
+    0.0,
+    1.0
+   ],
+   "mean_velocity": [
+    0.013,
+    0.031,
+    0.99
+   ],
+   "abs_err": [
+    0.023,
+    0.046,
+    0.072
+   ],
+   "fell": 0,
+   "of": 16,
+   "ratio": 0.99,
+   "drift_mps": 0.034,
+   "climbed": 0,
+   "climbed_and_upright": 0,
+   "max_rise_m": 0.028
+  },
+  "turn_1.5": {
+   "command": [
+    0.0,
+    0.0,
+    1.5
+   ],
+   "mean_velocity": [
+    0.013,
+    0.038,
+    1.48
+   ],
+   "abs_err": [
+    0.028,
+    0.052,
+    0.087
+   ],
+   "fell": 0,
+   "of": 16,
+   "ratio": 0.987,
+   "drift_mps": 0.04,
+   "climbed": 0,
+   "climbed_and_upright": 0,
+   "max_rise_m": 0.035
+  },
+  "turn_-1.0": {
+   "command": [
+    0.0,
+    0.0,
+    -1.0
+   ],
+   "mean_velocity": [
+    0.013,
+    -0.036,
+    -0.989
+   ],
+   "abs_err": [
+    0.026,
+    0.049,
+    0.077
+   ],
+   "fell": 0,
+   "of": 16,
+   "ratio": 0.989,
+   "drift_mps": 0.039,
+   "climbed": 0,
+   "climbed_and_upright": 0,
+   "max_rise_m": 0.046
+  },
+  "arc_0.5_0.5": {
+   "command": [
+    0.5,
+    0.0,
+    0.5
+   ],
+   "mean_velocity": [
+    0.532,
+    0.007,
+    0.505
+   ],
+   "abs_err": [
+    0.034,
+    0.019,
+    0.048
+   ],
+   "fell": 0,
+   "of": 16,
+   "ratio": 1.064,
+   "drift_mps": null,
+   "climbed": 0,
+   "climbed_and_upright": 0,
+   "max_rise_m": 0.013
+  },
+  "stand": {
+   "command": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "mean_velocity": [
+    -0.001,
+    -0.001,
+    -0.006
+   ],
+   "abs_err": [
+    0.001,
+    0.003,
+    0.012
+   ],
+   "fell": 0,
+   "of": 16,
+   "ratio": null,
+   "drift_mps": 0.002,
+   "climbed": 0,
+   "climbed_and_upright": 0,
+   "max_rise_m": 0.011
+  }
+ }
+}

@@ -24,9 +24,10 @@ SIM_DIR = HERE.parent                             # Isaac/go2_omniverse: the pol
 GENERATED = HERE / "generated"
 DRIVE_KEYS = ("W", "A", "S", "D", "Q", "E")
 # The walking policy the sim loads unless `--policy` names another: the K-Rail Square policy, trained on this sim's
-# robot (`policies/go2_krail_2026-10-12/README.md`). `--policy agent_cfg` walks with agent_cfg.py's rsl_rl checkpoint,
-# the default until 2026-10-12.
-DEFAULT_POLICY = "policies/go2_krail_2026-10-12"
+# robot and fine-tuned to stand and stop on four feet (`policies/go2_krail_2026-10-13/README.md`; the 2026-10-12 one
+# before it handstood when stopped). `--policy agent_cfg` walks with agent_cfg.py's rsl_rl checkpoint, the default
+# until 2026-10-12.
+DEFAULT_POLICY = "policies/go2_krail_2026-10-13"
 AGENT_CFG_POLICY = "agent_cfg"
 
 

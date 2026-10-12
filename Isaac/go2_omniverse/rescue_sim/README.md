@@ -107,10 +107,11 @@ trial.
 
 ## Walking policies
 
-By default (since 2026-10-12) the legs are walked by the exported K-Rail Square policy, `policies/go2_krail_2026-10-12` (`sim.py`, `DEFAULT_POLICY`). `--policy DIR` walks them with another exported policy; `DIR` holds `policy.pt` (TorchScript) and `params/deploy.yaml`, and is absolute or relative to this directory. `--policy agent_cfg` walks them with the rsl_rl checkpoint `agent_cfg.py` names, the 2026-09-15 flat policy, which was the default until then; that file's header has its measurements and its own rollbacks.
+By default (since 2026-10-12) the legs are walked by the exported K-Rail Square policy, since 2026-10-13 `policies/go2_krail_2026-10-13` (`sim.py`, `DEFAULT_POLICY`). `--policy DIR` walks them with another exported policy; `DIR` holds `policy.pt` (TorchScript) and `params/deploy.yaml`, and is absolute or relative to this directory. `--policy agent_cfg` walks them with the rsl_rl checkpoint `agent_cfg.py` names, the 2026-09-15 flat policy, which was the default until then; that file's header has its measurements and its own rollbacks.
 
 ```bash
 ./run_sim.sh --level square                                    # the default: 741 wide, steps, K-rails, the K-Rail Square
+./run_sim.sh --policy policies/go2_krail_2026-10-12            # the same policy before it learnt to stop on four feet
 ./run_sim.sh --policy agent_cfg                                # the 2026-09-15 flat policy, 235 wide
 ./run_sim.sh --policy policies/go2_policies_2026-09-18/flat    # 45 wide: IMU, joints, command, last action
 ./run_sim.sh --policy policies/go2_policies_2026-09-18/rough   # 232 wide: the same, plus a camera-masked height scan
@@ -121,6 +122,15 @@ By default (since 2026-10-12) the legs are walked by the exported K-Rail Square 
 the square 20 times in 20 (its README has the measurements, taken in this sim's environment). The 2026-09-18
 bundles reached the square's deck in none of 10 trials each; the `agent_cfg` policy has not been put through it.
 It reads the stock 48 terms, `base_lin_vel` included, and a full height scan at 5 cm (no camera mask).
+
+`policies/go2_krail_2026-10-13/` is that policy fine-tuned to carry its weight on all four feet (`../training/README.md`,
+"The stance fine-tune"), with the same contract. The 2026-10-12 one put 74-86 % of the weight on its front feet
+standing after a walk, and every time it was stopped from a forward walk (letting go of W does that, from 1.0 m/s) it
+lifted both rear feet for 0.3-0.5 s, nose down 10-12 deg and up to 29. This one stands at 51-56 % front, and 1-2 of
+16 robots lifted both rear feet briefly when stopped from 0.3-0.5 m/s and none from faster or other directions, nose
+down 3-5 deg. It still went through the square 20 times in 20, and 10 in 10 with 20 cm rails (8 before). It
+overshoots forward commands a little more (110 % at 0.3 m/s, 102 % at 1.0) and backs up at 87 % (92 before). Its
+README has the measurements.
 
 `policies/go2_policies_2026-09-18/` is the Go2_RL_workflow project's export of 2026-09-18, exactly as it came. Its README says what each policy was trained on and what it expects. Neither has been validated on hardware. The rough one reached terrain level 6.12 of 8 (about 13 cm cubes) and, by that README, struggles above about 15 cm.
 
@@ -287,6 +297,18 @@ Slow is safe for the arm. Its 10 Hz command hold counts sim time, and the VIP-Re
     it just under the 0.45 match it then needed; it now needs 0.3.
   - The alignment was within 4.6 cm and 1.3° of `/sim/robot_pose` every time.
   - Three of the runs were `route_mission.xml`, walking a route made active as the Routes tab makes it.
+
+**Checked on 2026-10-13, the four-footed K-Rail Square policy:**
+- **`policies/go2_krail_2026-10-13` is the default policy from this date** (`sim.py`, `DEFAULT_POLICY`;
+  `--policy policies/go2_krail_2026-10-12` for the one before). Its deploy contract is the 2026-10-12 one's, line for
+  line. The unit tests pass (70, both bundles').
+- **Through the K-Rail Square** as on 2026-10-12 (`../training/measure_square.py`, GPU physics): 20 of 20 routes at
+  0.5 m/s, 10 of 10 at 0.3 and 0.8, 10 of 10 with the rails at 15 cm and at 20 cm, none fell.
+- **Stops and stance on flat ground** (`../training/measure_stance.py`), the figures above. Its README has both
+  policies side by side.
+- **Not checked: `run_sim.sh` with this policy.** The full-mission runs above walked with the 2026-10-12 one, the
+  default when they were made. On the machine this one was trained on, `env_isaaclab` still had no `cyclonedds` on
+  2026-10-14, so the sim would not start there.
 
 **Not validated:**
 - The gait with the arm's drives and solver settings changed to D1Training's. The walking policy was trained with the stock ones; the smoke run shows it standing and walking, not how well it walks.
