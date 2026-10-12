@@ -1,8 +1,28 @@
 """Deterministic procedural lumber/OSB, slip-disk and acuity-target textures; no downloads."""
 
+import io
+import os
 from pathlib import Path
 
 import numpy as np
+
+
+def save_png(image, path: Path):
+    """`image` as a PNG at `path`, unless the file holds it already. A running sim reloads a texture whose file
+    changes, and aborts on one caught half-written, so another sim starting must leave unchanged files alone and
+    replace a changed one whole."""
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    data = buffer.getvalue()
+    path = Path(path)
+    try:
+        if path.read_bytes() == data:
+            return
+    except FileNotFoundError:
+        pass
+    partial = path.with_name(f".{path.name}.{os.getpid()}")
+    partial.write_bytes(data)
+    os.replace(partial, path)
 
 
 def write_textures(directory: Path):
@@ -31,7 +51,7 @@ def write_textures(directory: Path):
             ]
             shade = rng.uniform(0.70, 1.25)
             draw.polygon(polygon, fill=tuple(int(min(255, c * shade)) for c in base))
-        picture.save(directory / f"{name}.png")
+        save_png(picture, directory / f"{name}.png")
     from .geometry import ACUITY_TARGETS, COLORS
 
     for name, (color, gaps) in ACUITY_TARGETS.items():
@@ -48,7 +68,7 @@ def slip_disk(path, color, size=256):
     draw = ImageDraw.Draw(image)
     c = size / 2
     draw.rectangle((c, c - 5, size - 1, c + 5), fill=(15, 15, 15))
-    image.save(path)
+    save_png(image, path)
 
 
 def acuity_target(path, color, label, gaps, size=256):
@@ -87,4 +107,4 @@ def acuity_target(path, color, label, gaps, size=256):
         fill=(255, 255, 255),
         font=font,
     )
-    image.save(path)
+    save_png(image, path)
