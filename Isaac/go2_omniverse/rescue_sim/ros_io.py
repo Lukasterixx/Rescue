@@ -4,11 +4,16 @@ Published: `/clock` (sim time), `/joint_states`, `/odom` and the `odom -> livox_
 on every level load), a static `odom -> map`, the RTX lidar on `/glim_rosnode/points` (through OmniGraph), its IMU on
 `/livox/imu`, and the wrist RealSense on the realsense container's topics (`realsense.py`).
 Subscribed: `robot0/cmd_vel`; `/photo_request_str` / `/record_video_str`, which save the wrist camera's colour
-images under `photos/<id>/`; and `/sim/level` (std_msgs/String), the level window's buttons for scripts: a level's
-key (gravel, krails, square, cup, ...), `reset`, `new_cup`, `lie` or `stand`.
+images under `photos/<id>/`; `/sim/level` (std_msgs/String), the level window's buttons for scripts: a level's
+key (gravel, krails, square, cup, ...), `reset`, `new_cup`, `lie` or `stand`; and `/sim/teleport`
+(geometry_msgs/PoseStamped), which reloads the current level with the robot starting at that pose instead of on its
+entry pad (frame_id `arena`, the level's own frame, or `world`; `levels.teleport_pose` has the rules).
 
-Ground truth, for judging a behaviour and never for driving one (the robot has no such topic): `/sim/cup_pose`, the
-cup's pose in the world frame, where its origin is on its axis at its base.
+Ground truth, for judging a behaviour and never for driving one (the robot has no such topics): `/sim/robot_pose`, the
+trunk's pose in the world frame, every step; `/sim/status` (std_msgs/String, JSON, latched), the level, a count of
+loads, the posture and whether the robot has fallen since the last load (`runtime.LevelManager.status`), sent on every
+change and once a second of sim time; and `/sim/cup_pose`, the cup's pose in the world frame, where its origin is on
+its axis at its base.
 
 What is **not** here any more: `/arm_commands` and `/camera_pose`. The arm is the D1's own business now -- it is
 driven over its DDS protocol by whatever holds it (the behaviour tree, through `maps/arm_bridge.py --sim`), exactly
@@ -166,12 +171,12 @@ def sim_time_msg(seconds: float):
 class SimNode:
     """The sim's ROS node, `go2_driver_node` as before, so VIP-Rescue's launch files still find it."""
 
-    def __init__(self, num_envs: int, on_cmd_vel, on_level=None):
+    def __init__(self, num_envs: int, on_cmd_vel, on_level=None, on_teleport=None):
         import rclpy
         from rcl_interfaces.msg import SetParametersResult
         from geometry_msgs.msg import PoseStamped, TransformStamped, Twist
         from nav_msgs.msg import Odometry
-        from rclpy.qos import QoSProfile
+        from rclpy.qos import DurabilityPolicy, QoSProfile
         from rosgraph_msgs.msg import Clock
         from sensor_msgs.msg import Imu, JointState
         from std_msgs.msg import String
@@ -191,6 +196,11 @@ class SimNode:
         self.joint_pub = node.create_publisher(JointState, "/joint_states", qos)
         self.imu_pub = node.create_publisher(Imu, IMU_TOPIC, qos)
         self.cup_pub = node.create_publisher(PoseStamped, "/sim/cup_pose", qos)
+        self.robot_pose_pub = node.create_publisher(PoseStamped, "/sim/robot_pose", qos)
+        # Latched, so a script that starts after the last change still hears it.
+        self.status_pub = node.create_publisher(
+            String, "/sim/status", QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        self._String = String
         self._PoseStamped = PoseStamped
         self._last_imu = None           # (sim time, lidar point velocity in the world)
         self.odom_pub = node.create_publisher(Odometry, "odom", qos) if self.publish_map_odom else None
@@ -210,6 +220,12 @@ class SimNode:
         node.create_subscription(String, "/record_video_str", self._record, 10)
         if on_level is not None:
             node.create_subscription(String, "/sim/level", lambda msg: on_level(msg.data.strip()), 10)
+        if on_teleport is not None:
+            def teleport(msg):
+                p, q = msg.pose.position, msg.pose.orientation
+                on_teleport(msg.header.frame_id, (p.x, p.y, p.z), (q.w, q.x, q.y, q.z))
+
+            node.create_subscription(PoseStamped, "/sim/teleport", teleport, 10)
         if self.publish_map_odom:
             self._publish_map_odom()
         node.add_on_set_parameters_callback(self._on_parameters)
@@ -267,15 +283,23 @@ class SimNode:
             self._odom(i, data.root_state_w[i, :3].detach().cpu().numpy(),
                        data.root_state_w[i, 3:7].detach().cpu().numpy(), stamp)
         self._imu(sim_time_s, data, stamp)
+        self._publish_pose(self.robot_pose_pub, stamp, data.root_pos_w[0], data.root_quat_w[0])
         if cup is not None:
-            pose = self._PoseStamped()
-            pose.header.stamp, pose.header.frame_id = stamp, "world"
-            p = cup.data.root_pos_w[0].detach().cpu().tolist()
-            q = cup.data.root_quat_w[0].detach().cpu().tolist()
-            pose.pose.position.x, pose.pose.position.y, pose.pose.position.z = p
-            pose.pose.orientation.w, pose.pose.orientation.x, pose.pose.orientation.y, pose.pose.orientation.z = q
-            self.cup_pub.publish(pose)
+            self._publish_pose(self.cup_pub, stamp, cup.data.root_pos_w[0], cup.data.root_quat_w[0])
         return stamp
+
+    def _publish_pose(self, publisher, stamp, pos, quat_wxyz) -> None:
+        pose = self._PoseStamped()
+        pose.header.stamp, pose.header.frame_id = stamp, "world"
+        pose.pose.position.x, pose.pose.position.y, pose.pose.position.z = (float(v) for v in pos.detach().cpu())
+        (pose.pose.orientation.w, pose.pose.orientation.x, pose.pose.orientation.y,
+         pose.pose.orientation.z) = (float(v) for v in quat_wxyz.detach().cpu())
+        publisher.publish(pose)
+
+    def publish_status(self, status: dict) -> None:
+        import json
+
+        self.status_pub.publish(self._String(data=json.dumps(status)))
 
     def forget_motion(self) -> None:
         """A teleport is not an acceleration: the next IMU sample starts afresh."""

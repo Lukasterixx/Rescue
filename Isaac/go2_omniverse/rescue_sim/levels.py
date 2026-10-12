@@ -67,6 +67,9 @@ class Level:
     posture_fixed: bool = False
     group: str = ""     # the level window's row: the arena
     label: str = ""     # its button in that row: the setting, or "" when the arena has one level
+    # The arena's own frame in the world: a lane's origin (the K-Rail Square's is its centre), with the world's axes.
+    # Courses are drawn in it (`training/measure_square.py`'s route), and `/sim/teleport` takes poses in it.
+    origin: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
     @property
     def yaw_deg(self) -> float:
@@ -77,7 +80,8 @@ class Level:
 def competition_levels(lanes) -> list[Level]:
     """One level per competition lane, starting on the lane's entry pad."""
     return [Level(lane.key, lane.title, tuple(lane.spawn), tuple(lane.spawn_rotation), STANDING,
-                  getattr(lane, "subtitle", ""), group=lane.arena, label=lane.setting) for lane in lanes]
+                  getattr(lane, "subtitle", ""), group=lane.arena, label=lane.setting,
+                  origin=tuple(float(v) for v in lane.origin)) for lane in lanes]
 
 
 CUP_DEMO = Level(
@@ -87,6 +91,7 @@ CUP_DEMO = Level(
     "D1Training's pick scene: the Go2 lying, a 55 x 100 mm mug 42 cm ahead",
     posture_fixed=True,
     group="Cup demo",
+    origin=(CUP_DEMO_BASE_XY[0], CUP_DEMO_BASE_XY[1], 0.0),
 )
 
 
@@ -110,6 +115,43 @@ def base_to_world(level: Level, xy_b, yaw_b_deg: float = 0.0) -> tuple[float, fl
     x = level.spawn[0] + math.cos(yaw) * xy_b[0] - math.sin(yaw) * xy_b[1]
     y = level.spawn[1] + math.sin(yaw) * xy_b[0] + math.cos(yaw) * xy_b[1]
     return x, y, level.yaw_deg + yaw_b_deg
+
+
+def teleport_pose(level: Level, frame: str, position, orientation_wxyz):
+    """Where `/sim/teleport` puts the robot: its root pose (x, y, z) and rotation (wxyz) in the world.
+
+    `frame` is "world", or "arena" (or "", which means "arena"): the level's `origin`, with the world's axes. Only the
+    heading of `orientation_wxyz` is used, since the robot is put down level. A `position` z of 0 means "as high as the
+    level's spawn" (on the entry pad, standing); any other z is the root's height in the world. Raises ValueError for
+    any other frame."""
+    frame = frame or "arena"
+    if frame not in ("arena", "world"):
+        raise ValueError(f"frame '{frame}' is not 'arena' or 'world'")
+    x, y, z = (float(v) for v in position)
+    if frame == "arena":
+        x, y = x + level.origin[0], y + level.origin[1]
+        if z:
+            z += level.origin[2]
+    w, qx, qy, qz = (float(v) for v in orientation_wxyz)
+    yaw = math.atan2(2.0 * (w * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
+    return (x, y, z or level.spawn[2]), yaw_quat_wxyz(math.degrees(yaw))
+
+
+# A fall, as `training/measure_square.py` judges one: the base tipped past 60 deg, or the trunk touching anything.
+# Not the head: with self-collisions on, a front leg brushes Head_lower in a turn.
+FALL_TILT_DEG = 60.0
+FALL_TRUNK_FORCE_N = 1.0
+
+
+def fall_reason(gravity_z_b: float, trunk_force_n: float) -> str | None:
+    """Why the robot counts as fallen, or None. `gravity_z_b` is gravity's direction in the base frame, z (-1 when
+    level); `trunk_force_n` the largest contact force on the trunk."""
+    tilt = math.degrees(math.acos(max(-1.0, min(1.0, -gravity_z_b))))
+    if tilt > FALL_TILT_DEG:
+        return f"tilted {tilt:.0f} deg"
+    if trunk_force_n > FALL_TRUNK_FORCE_N:
+        return f"trunk touching something ({trunk_force_n:.0f} N)"
+    return None
 
 
 def cup_pose(level: Level, xy_b=CUP_XY_B, yaw_b_deg: float = CUP_YAW_DEG, floor_z: float = 0.0):

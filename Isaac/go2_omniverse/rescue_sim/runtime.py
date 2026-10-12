@@ -9,6 +9,10 @@ and clears the policy's action history so its next input is fresh.
 Levels are picked from the level window's buttons (or `/sim/level`), never by key: there are too many to step
 through, and Isaac Sim already binds F2 (rename), F7 (hide the UI), F10 (screenshot) and F11 (full screen). A
 controller outside the sim (nav2, the behaviour tree) is not reset: it can send new commands straight after.
+
+For scripts that test a behaviour, `/sim/teleport` reloads the current level with the robot starting somewhere else
+(`request_teleport`), and `status()` is what `/sim/status` reports: the level, how many loads there have been (so a
+script can tell its reset has happened), the posture, and whether the robot has fallen since the last load (`watch`).
 """
 from __future__ import annotations
 
@@ -42,9 +46,13 @@ class LevelManager:
         self._new_cup = False
         self._toggle_posture = False
         self._light_request = None
+        self._teleport = None             # (spawn, rotation) for the next load, from /sim/teleport
         self._cup_rng = np.random.default_rng(seed + 1)
         self.needs_observation = False
         self.loads = 0
+        self.start_pose = None            # where the robot started at the last load: (spawn, rotation)
+        self.fall = None                  # why the robot counts as fallen since the last load, or None
+        self.changes = 0                  # bumped whenever status() changes other than by time
         self.on_status = on_status
         self.window = None
         self._buttons = []
@@ -84,6 +92,17 @@ class LevelManager:
         with self._lock:
             self._light_request = (not self.light.on if on is None else on) if self.light is not None else None
 
+    def request_teleport(self, frame: str, position, orientation_wxyz) -> None:
+        """Reload the current level with the robot starting at this pose (`levels.teleport_pose` reads it)."""
+        try:
+            pose = lv.teleport_pose(self.level, frame, position, orientation_wxyz)
+        except ValueError as exc:
+            print(f"[levels] /sim/teleport: {exc}", flush=True)
+            return
+        with self._lock:
+            self._teleport = pose
+            self.selection.select(self.selection.current)
+
     def request(self, word: str) -> None:
         """What `/sim/level` asks for: a level's key, reset, new_cup, lie, stand, light_on or light_off."""
         keys = [level.key for level in self.levels]
@@ -106,11 +125,35 @@ class LevelManager:
     def level(self) -> lv.Level:
         return self.levels[self.selection.current]
 
+    def status(self, sim_time_s: float) -> dict:
+        """What `/sim/status` says, as JSON: ground truth for a script judging a behaviour, never for driving one."""
+        level = self.level
+        spawn, rotation = self.start_pose or (level.spawn, level.spawn_rotation)
+        w, _, _, z = rotation
+        return {
+            "level": level.key, "title": level.title, "loads": self.loads, "sim_time": round(sim_time_s, 3),
+            "posture": self.posture.posture, "walking": self.posture.walking,
+            "fallen": self.fall is not None, "fall": self.fall,
+            # The arena's frame (`Level.origin`, world axes), and where this load put the robot in the world.
+            "origin": list(level.origin),
+            "start": {"x": round(spawn[0], 4), "y": round(spawn[1], 4), "z": round(spawn[2], 4),
+                      "yaw_deg": round(math.degrees(2.0 * math.atan2(z, w)), 3)},
+        }
+
+    def watch(self, gravity_z_b: float, trunk_force_n: float) -> None:
+        """Called every step: latch the first fall since the last load (`levels.fall_reason`)."""
+        if self.fall is None and self.posture.walking:
+            self.fall = lv.fall_reason(gravity_z_b, trunk_force_n)
+            if self.fall is not None:
+                self.changes += 1
+                self.say(f"the robot has fallen: {self.fall}")
+
     # ------------------------------------------------------------------------------------------ the loop
     def update(self) -> None:
         with self._lock:
             load = self.selection.pending is not None
             index = self.selection.consume()
+            teleport, self._teleport = self._teleport, None
             new_cup, self._new_cup = self._new_cup, False
             toggle, self._toggle_posture = self._toggle_posture, False
             light, self._light_request = self._light_request, None
@@ -119,7 +162,7 @@ class LevelManager:
             self.say(f"wrist light {'on' if light else 'off'}")
             self._refresh_ui()
         if load:
-            self._load(self.levels[index])
+            self._load(self.levels[index], teleport)
         elif new_cup and self.level.key == lv.CUP_DEMO.key:
             (xy, yaw) = lv.random_cup(self._cup_rng)
             self._place_cup(xy, yaw)
@@ -135,9 +178,11 @@ class LevelManager:
         return (targets - self._offset) / self._scale
 
     # ------------------------------------------------------------------------------------------ loading
-    def _load(self, level: lv.Level) -> None:
+    def _load(self, level: lv.Level, start=None) -> None:
+        """Load `level`, with the robot at its spawn, or at `start` ((x, y, z), wxyz) when a teleport asked."""
         robot = self.robot
-        pose = torch.tensor([[*level.spawn, *level.spawn_rotation]], dtype=torch.float32, device=self.device)
+        spawn, rotation = start or (level.spawn, level.spawn_rotation)
+        pose = torch.tensor([[*spawn, *rotation]], dtype=torch.float32, device=self.device)
         robot.write_root_pose_to_sim(pose)
         robot.write_root_velocity_to_sim(torch.zeros(1, 6, device=self.device))
         joint_pos = robot.data.default_joint_pos.clone()
@@ -174,10 +219,18 @@ class LevelManager:
             self.ros.rezero_odom()
         self.needs_observation = True
         self.loads += 1
+        self.start_pose = (tuple(spawn), tuple(rotation))
+        self.fall = None
+        self.changes += 1
         self._view(level)
         self._refresh_ui()
+        where = ""
+        if start is not None:
+            w, _, _, z = rotation
+            where = (f", teleported to ({spawn[0] - level.origin[0]:.2f}, {spawn[1] - level.origin[1]:.2f}) in the "
+                     f"arena facing {math.degrees(2.0 * math.atan2(z, w)):.0f} deg")
         self.say(f"{self.selection.current + 1}/{len(self.levels)} {level.title}: "
-                 f"{'lying down' if level.posture == lv.LYING else 'standing'}, arm folded at rest")
+                 f"{'lying down' if level.posture == lv.LYING else 'standing'}, arm folded at rest{where}")
 
     def _place_cup(self, xy_b, yaw_b_deg) -> None:
         pose = lv.cup_pose(self.level, xy_b, yaw_b_deg)
@@ -201,6 +254,7 @@ class LevelManager:
                 env_cfg.base_command[key] = [0.0, 0.0, 0.0]
             self.posture.begin(lv.LYING, current, self.lying_legs)
             self.say("lying down")
+        self.changes += 1
         self._refresh_ui()
 
     def _view(self, level: lv.Level) -> None:

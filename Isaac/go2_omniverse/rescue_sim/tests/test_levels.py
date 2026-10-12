@@ -139,5 +139,49 @@ class PostureTests(unittest.TestCase):
             ramp.set(lv.LYING)
 
 
+class SimApiTests(unittest.TestCase):
+    """What `/sim/teleport` and `/sim/status` read: the arena's frame, teleport poses and the fall test."""
+
+    def setUp(self):
+        lanes = build_lanes(Options(gravel="static"))
+        self.levels = {level.key: level for level in lv.catalogue(lanes)}
+        self.lanes = {lane.key: lane for lane in lanes}
+
+    def test_a_lane_level_is_drawn_in_its_lanes_frame(self):
+        square = self.levels["square"]
+        self.assertEqual(square.origin, tuple(float(v) for v in self.lanes["square"].origin))
+        # The K-Rail Square's start, in its own frame, is the entry pad outside its south-west corner, facing north.
+        self.assertAlmostEqual(square.spawn[0] - square.origin[0], -1.85)
+        self.assertAlmostEqual(square.spawn[1] - square.origin[1], -1.2)
+        self.assertAlmostEqual(square.yaw_deg, 90.0)
+        self.assertEqual(lv.CUP_DEMO.origin[:2], lv.CUP_DEMO.spawn[:2])
+
+    def test_a_teleport_in_the_arena_frame_keeps_the_spawn_height_and_only_the_heading(self):
+        square = self.levels["square"]
+        half = math.sqrt(0.5)
+        # 30 deg about x then 90 about z: the roll is dropped, the heading kept.
+        roll, yaw = math.radians(30), math.radians(90)
+        q = (math.cos(yaw / 2) * math.cos(roll / 2), math.cos(yaw / 2) * math.sin(roll / 2),
+             math.sin(yaw / 2) * math.sin(roll / 2), math.sin(yaw / 2) * math.cos(roll / 2))
+        (x, y, z), rotation = lv.teleport_pose(square, "arena", (-1.8, -1.1, 0.0), q)
+        self.assertAlmostEqual(x, square.origin[0] - 1.8)
+        self.assertAlmostEqual(y, square.origin[1] - 1.1)
+        self.assertEqual(z, square.spawn[2])
+        np.testing.assert_allclose(rotation, (half, 0.0, 0.0, half), atol=1e-12)
+        # The default frame is the arena; a world pose is taken as it is, and a z other than 0 is the root's height.
+        self.assertEqual(lv.teleport_pose(square, "", (1, 2, 0), (1, 0, 0, 0)),
+                         lv.teleport_pose(square, "arena", (1, 2, 0), (1, 0, 0, 0)))
+        (x, y, z), _ = lv.teleport_pose(square, "world", (1.0, 2.0, 0.55), (1, 0, 0, 0))
+        self.assertEqual((x, y, z), (1.0, 2.0, 0.55))
+        with self.assertRaises(ValueError):
+            lv.teleport_pose(square, "odom", (0, 0, 0), (1, 0, 0, 0))
+
+    def test_a_fall_is_a_tip_past_60_deg_or_the_trunk_touching(self):
+        self.assertIsNone(lv.fall_reason(-1.0, 0.0))
+        self.assertIsNone(lv.fall_reason(-math.cos(math.radians(55)), 0.5))
+        self.assertIn("tilted 65 deg", lv.fall_reason(-math.cos(math.radians(65)), 0.0))
+        self.assertIn("trunk", lv.fall_reason(-1.0, 12.0))
+
+
 if __name__ == "__main__":
     unittest.main()

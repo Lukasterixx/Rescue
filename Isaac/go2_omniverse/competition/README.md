@@ -197,8 +197,12 @@ two Linear Align/Inspect tasks and the maze rooms' two omni tasks are included.
 - `build.py`, `textures.py`: USD export, materials, scanner geometry, the scene
   manifest, a plan/3D preview, and the geometry arguments the sim takes.
 - `runtime.py`: resets for the loose bodies (gravel, avoid posts and slip disks).
-- `tests/`: geometry, the difficulty settings, real USD-reference composition, and the
-  loose-body binding.
+- `web_export.py`: every lane for VIP-Rescue's website Routes tab, into its `maps/`. Each lane gets a glTF model and
+  its wall cells (5 cm cells 0.65–3 m above the start floor, which the robot aligns its route to), in the lane's own
+  frame. The K-Rail Square also gets its course route as a route file. Run
+  `python3 -m competition.web_export` (into `$VIP_RESCUE_ROOT`, default `~/VIP-Rescue`) after changing a lane.
+- `tests/`: geometry, the difficulty settings, real USD-reference composition, the
+  loose-body binding, and the web export.
 
 Export without launching the simulator, using a Python environment with `numpy`,
 `scipy`, `usd-core` and `Pillow` (plus `matplotlib` for `--preview`):

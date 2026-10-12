@@ -318,7 +318,11 @@ def run(args, simulation_app):
         if manager is not None:
             manager.request(word)
 
-    ros = SimNode(1, on_cmd_vel, on_level)
+    def on_teleport(frame, position, orientation):
+        if manager is not None:
+            manager.request_teleport(frame, position, orientation)
+
+    ros = SimNode(1, on_cmd_vel, on_level, on_teleport)
     executor = SingleThreadedExecutor()
     executor.add_node(ros.node)
     threading.Thread(target=executor.spin, daemon=True).start()
@@ -344,7 +348,10 @@ def run(args, simulation_app):
     # --- the loop -----------------------------------------------------------------------------------------
     wrist = core.scene["wrist_cam"]
     cup_object = core.scene["cup"]
+    contacts = core.scene["contact_forces"]
+    trunk_ids, _ = contacts.find_bodies("base")
     step_dt = core.step_dt
+    status_sent = (-1, -math.inf)            # (manager.changes, sim time) of the last /sim/status
     camera_every = max(1, round(1.0 / (args.camera_hz * step_dt)))
     smoke = _Smoke(args.smoke_steps, levels, args.smoke_shots, args.headless) if args.smoke_steps else None
     steps = 0
@@ -369,7 +376,13 @@ def run(args, simulation_app):
                 rate.mark("env.step")
                 d1.end_step()
                 steps += 1
-                stamp = ros.publish(core.common_step_counter * step_dt, robot, cup_object)
+                sim_time = core.common_step_counter * step_dt
+                manager.watch(float(robot.data.projected_gravity_b[0, 2]),
+                              float(contacts.data.net_forces_w[0, trunk_ids].norm(dim=-1).max()))
+                stamp = ros.publish(sim_time, robot, cup_object)
+                if manager.changes != status_sent[0] or sim_time - status_sent[1] >= 1.0:
+                    ros.publish_status(manager.status(sim_time))
+                    status_sent = (manager.changes, sim_time)
                 rate.mark("ros")
                 if steps % camera_every == 0:
                     rgb = wrist.data.output["rgb"][0, ..., :3].detach().cpu().numpy().astype(np.uint8)

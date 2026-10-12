@@ -78,6 +78,31 @@ Scripts can do everything the window does through `/sim/level` (std_msgs/String)
 - `reset`, `new_cup`, `lie` or `stand`;
 - `light_on` or `light_off`.
 
+### The sim's API, for scripts that test a behaviour
+
+Four more topics let a script reset the robot, start it somewhere else, and judge what it did. They are ground truth
+that the robot doesn't have, so use them to judge a behaviour and never to drive one.
+
+| Topic | Type | |
+| --- | --- | --- |
+| `/sim/teleport` | geometry_msgs/PoseStamped, in | Reloads the current level as `reset` does, but starts the robot at this pose. `frame_id` is `arena`, the level's own frame (the default, also for `""`), or `world`. The arena frame is a lane's origin with the world's axes; for the K-Rail Square that is its centre, +x east, +y north. Only the heading of the orientation is used. A z of 0 means standing at the spawn's height; any other z is the trunk's height. Odometry is re-zeroed where it puts the robot. |
+| `/sim/status` | std_msgs/String, JSON, latched | Sent on every change and once a second of sim time. Fields: `level`, `title`, `loads` (counts every load, reset and teleport, so a script can tell its own has happened), `sim_time`, `posture`, `walking`, `fallen` and `fall` (since the last load), `origin` (the arena frame in the world) and `start` (where the last load put the trunk: `x`, `y`, `z`, `yaw_deg` in the world). |
+| `/sim/robot_pose` | geometry_msgs/PoseStamped | The trunk's pose in the world, every step. |
+| `/sim/cup_pose` | geometry_msgs/PoseStamped | The cup's pose in the world (below). |
+
+A fall is what `training/measure_square.py` counts as one: the trunk tipped past 60° or touching anything. Only
+falls while the walking policy has the legs count.
+
+```bash
+ros2 topic pub --once /sim/level std_msgs/String "data: square"            # the K-Rail Square, robot on the START pad
+ros2 topic pub --once /sim/teleport geometry_msgs/PoseStamped \
+  "{header: {frame_id: arena}, pose: {position: {x: -1.8, y: -1.15}, orientation: {z: 0.7071, w: 0.7071}}}"
+ros2 topic echo --once /sim/status
+```
+
+VIP-Rescue's `go2_control_cpp/test/krail_square/sim_trials.py` uses this API to run the K-Rail Square tree trial after
+trial.
+
 **The viewport is yours.** Nothing moves it except one look at each level as it loads. To follow the robot, set Follow Mode to "Asset Root" in the IsaacLab tab's Viewer Settings. The old chase camera is gone.
 
 ## Walking policies
@@ -192,6 +217,7 @@ Two renderer limits come with it, as in D1Training:
 | `/livox/imu` | Orientation, angular velocity and specific force at the lidar, at the policy rate. It is computed, because the old native IMU sensor was never created (Isaac logs "Could not create Imu sensor prim" and carries on) |
 | `robot0/cmd_vel` | Velocity command, while standing |
 | `/sim/level` | See [Levels](#levels) |
+| `/sim/teleport`, `/sim/status`, `/sim/robot_pose` | See [The sim's API](#the-sims-api-for-scripts-that-test-a-behaviour) |
 | `/sim/cup_pose` | Ground truth: the cup's pose in the world. For judging a behaviour, never for driving one |
 
 ## Speed
@@ -237,15 +263,35 @@ Slow is safe for the arm. Its 10 Hz command hold counts sim time, and the VIP-Re
 - **`policies/go2_krail_2026-10-12` through the K-Rail Square**, in this sim's environment without ROS and the arm's
   DDS link (`../training/measure_square.py`, GPU physics): 20 of 20 routes at 0.5 m/s, 10 of 10 at 0.3 and 0.8,
   10 of 10 with the rails at 15 cm and 8 of 10 at 20 cm, none fell. Its README has the rest.
-- **Not checked: `run_sim.sh` itself.** It stops at startup on this machine: `env_isaaclab` has no `cyclonedds`,
-  which `d1_arm.D1DdsLink` imports. PyPI's only wheel for Python 3.11 is cyclonedds 11.0.1; 0.10.x (the `orbit`
-  environment has 0.10.2) has to be built against a CycloneDDS C install. Which one passed the 2026-09-18 smoke
-  run is not recorded.
+- **`run_sim.sh` itself.** It starts on this machine now: `env_isaaclab` has cyclonedds 11.0.1, PyPI's only wheel for
+  Python 3.11. Headless on the K-Rail Square it runs at 0.58× real time.
+- **The sim's API** (`/sim/teleport`, `/sim/status`, `/sim/robot_pose`): unit tests for the arena frame, teleport
+  poses and the fall test (63 tests in all), and in use below.
+- **VIP-Rescue's K-Rail Square tree in a full mission** (`behavior_trees/krail_square.xml`, through
+  `minimal_bt_launch_sim.py tree:=krail_square.xml` and `test/krail_square/sim_trials.py`). The route is the course
+  drawing's, from the START pad to the END pad. The wall scanner ran with the arm folded low, pivoting on Joint1. The
+  arm was driven through `arm_bridge.py --sim` on a spare port, because the website's bridge on 8084 had no cyclonedds.
+  - Robot on the pad's centre: 5 of 5 reached the END pad by every stage (onto the deck, over both K-rails, off the
+    deck), in 19.4–19.9 s of sim time, with no falls.
+  - Robot up to 5 cm and 5° off the pad's centre: 5 of 5, the same.
+  - The arm: Joint1 swept up to −114° and +113°, then stowed at the end.
+  - Railings coloured: all of the mapped length (6.7 of their 7.2 m) in 9 runs, and 6.2 m in the tenth (the inside
+    of the west railing beside the START pad). By cells, 75–94%: the lidar draws a railing two to four cells thick,
+    and the scan paints only what it looks at.
+  - An earlier 12 runs (the first with no arm: the bridge it reached could not talk to it) all reached the END pad too.
+- **The same with `AlignRoute`** (VIP-Rescue's `krail_square.xml` and `route_mission.xml`). Before walking, the
+  robot matches the railings it sees against the square's, from `competition/web_export.py`.
+  - The robot was put down by `/sim/teleport`, up to 0.64 m and 55° off the pad's centre (15 of the runs off it, one
+    on it as a check).
+  - Of 16 such runs, 15 reached the END pad by every stage, with no falls. The other found the right pose but scored
+    it just under the 0.45 match it then needed; it now needs 0.3.
+  - The alignment was within 4.6 cm and 1.3° of `/sim/robot_pose` every time.
+  - Three of the runs were `route_mission.xml`, walking a route made active as the Routes tab makes it.
 
 **Not validated:**
 - The gait with the arm's drives and solver settings changed to D1Training's. The walking policy was trained with the stock ones; the smoke run shows it standing and walking, not how well it walks.
 - The exported policies anywhere but the gravel lane's start. The rough one's reason to exist is terrain: the stepfields, ramps and pallets are where it should do better than the flat policies, and whether it does is untested.
-- The wall scanner in a full mission.
+- The wall scanner in the maze's full mission (the K-Rail Square's is checked above).
 - Anything on the real robot.
 - Gravel behaviour; see `../competition/README.md`.
 - Walking any lane from the stepfields on, including all seven sloped and obstacle copies, or pushing the door. The smoke run only loads them. Whether the walking policy copes with 15° side slopes, 20 cm rails, pinch points or turning disks is unknown.
