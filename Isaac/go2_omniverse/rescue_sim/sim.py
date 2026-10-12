@@ -78,6 +78,9 @@ def parse_args(argv=None):
     parser.add_argument("--camera-hz", type=float, default=15.0, help="wrist camera publishing rate on ROS")
     parser.add_argument("--wrist-light", action="store_true",
                         help="start with the lamp beside the wrist camera on (the window toggles it)")
+    parser.add_argument("--world-lidar", action=argparse.BooleanOptionalAction, default=True,
+                        help="trace the lidar in the world and publish each scan in livox_frame at the TF's pose "
+                             "for its stamp (default on); --no-world-lidar is Isaac's own sensor-frame cloud")
     parser.add_argument("--profile", action="store_true", help="print where each step's time goes, every 10 s")
     cli_args.add_rsl_rl_args(parser)
     AppLauncher.add_app_launcher_args(parser)
@@ -290,7 +293,7 @@ def run(args, simulation_app):
     policy = _load_exported(exported, core) if exported else _load_policy(env, agent_cfg, core.device)[1]
 
     # --- sensors that need the timeline, then a reset for them to take ----------------------------------------
-    add_lidar(1, debug=False)
+    scans = add_lidar(1, debug=False, world_frame=args.world_lidar)
     core.sim.reset()
 
     # --- the arm's firmware, ROS, the levels ------------------------------------------------------------------
@@ -322,7 +325,7 @@ def run(args, simulation_app):
         if manager is not None:
             manager.request_teleport(frame, position, orientation)
 
-    ros = SimNode(1, on_cmd_vel, on_level, on_teleport)
+    ros = SimNode(1, on_cmd_vel, on_level, on_teleport, scans)
     executor = SingleThreadedExecutor()
     executor.add_node(ros.node)
     threading.Thread(target=executor.spin, daemon=True).start()

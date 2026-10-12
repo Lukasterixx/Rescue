@@ -1,8 +1,9 @@
 """What the sim says and hears on ROS 2 (Isaac's bundled Humble bridge, Fast DDS).
 
 Published: `/clock` (sim time), `/joint_states`, `/odom` and the `odom -> livox_frame` TF (re-zeroed at startup and
-on every level load), a static `odom -> map`, the RTX lidar on `/glim_rosnode/points` (through OmniGraph), its IMU on
-`/livox/imu`, and the wrist RealSense on the realsense container's topics (`realsense.py`).
+on every level load), a static `odom -> map`, the RTX lidar on `/glim_rosnode/points` (traced in the world, published
+in livox_frame at the TF's pose for its stamp: `add_lidar`), its IMU on `/livox/imu`, and the wrist RealSense on the
+realsense container's topics (`realsense.py`).
 Subscribed: `robot0/cmd_vel`; `/photo_request_str` / `/record_video_str`, which save the wrist camera's colour
 images under `photos/<id>/`; `/sim/level` (std_msgs/String), the level window's buttons for scripts: a level's
 key (gravel, krails, square, cup, ...), `reset`, `new_cup`, `lie` or `stand`; and `/sim/teleport`
@@ -20,8 +21,8 @@ driven over its DDS protocol by whatever holds it (the behaviour tree, through `
 as on the robot -- and the camera is fixed to the wrist, as the real one is. The TF for the wrist camera
 (`arm_camera_link`) comes from VIP-Rescue's arm runtime, from the arm's own feedback, on the robot and here alike.
 
-The lidar graph is Rescue's `ros2.py`, unchanged: an RTX lidar at LIVOX_OFFSET_BASE on the trunk with the
-Livox-like blended vertical layout. The IMU is not the old native IMU graph: Isaac never created that sensor under
+The lidar is Rescue's `ros2.py` one: an RTX lidar at LIVOX_OFFSET_BASE on the trunk with the Livox-like blended
+vertical layout. The IMU is not the old native IMU graph: Isaac never created that sensor under
 the welded robot (it logs "Could not create Imu sensor prim" and reports success anyway, in the old sim too), so
 `/livox/imu` came up empty. It is computed here instead, at the policy rate, from the trunk's state at the lidar:
 orientation, angular velocity, and the specific force (acceleration less gravity, the lidar point's velocity
@@ -29,6 +30,7 @@ differenced), all in livox_frame, which is the trunk's orientation.
 """
 from __future__ import annotations
 
+import array
 import datetime
 import importlib
 from pathlib import Path
@@ -37,6 +39,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 LIVOX_OFFSET_BASE = np.array([0.3, 0.0, 0.25], dtype=float)
+LIDAR_TOPIC = "/glim_rosnode/points"
 IMU_TOPIC = "/livox/imu"
 IMU_FRAME_ID = "livox_frame"
 GRAVITY_W = np.array([0.0, 0.0, -9.81])
@@ -44,7 +47,7 @@ PHOTO_ROOT = Path(__file__).resolve().parents[1] / "photos"
 
 _keep_alive = []
 _lidar_render_products = []
-_lidar_debug = {"enabled": False, "writer": None}
+_lidar_debug = {"enabled": False, "writer": None, "world": False}
 
 
 # ------------------------------------------------------------------------------------------ lidar and IMU
@@ -64,7 +67,7 @@ def _set_attr_if_present(prim, names, value):
     return False
 
 
-def _lidar_graph(robot_num, lidar_sensor, topic_name="/glim_rosnode/points"):
+def _lidar_graph(robot_num, lidar_sensor, topic_name=LIDAR_TOPIC):
     import omni.graph.core as og
 
     keys = og.Controller.Keys
@@ -95,7 +98,16 @@ def _lidar_graph(robot_num, lidar_sensor, topic_name="/glim_rosnode/points"):
     )
 
 
-def add_lidar(num_envs: int = 1, debug: bool = False) -> None:
+def add_lidar(num_envs: int = 1, debug: bool = False, world_frame: bool = True) -> list:
+    """The lidars, one a robot. With `world_frame` they trace in WORLD and their `WorldScan`s are returned, for
+    `SimNode` to publish; without, Isaac publishes each scan in livox_frame itself, and the list is empty.
+
+    Why WORLD: Isaac's own cloud is the scan in the sensor frame, stamped 0.08 s ahead of `/clock` and the TF, so
+    the TF at its stamp is the pose 0.06 s after the one the scan was traced from. Measured spinning at 1.25 rad/s
+    on the K-Rail Square's pad, the walls landed turned 74 mrad (4 deg) in `odom`, 37 cm at 5 m. Traced in WORLD,
+    every point is where it hit, whatever the robot did, and `SimNode` puts the scan back in livox_frame at the
+    pose it publishes on TF for the same stamp, so a consumer that takes it out with that TF gets the world back
+    exactly (measured: 0 mrad, and stamps equal to the TF's). P2Dingo's sim does the same (`MID360_DESKEW`)."""
     import carb
     import omni.timeline
     import omni.usd
@@ -106,10 +118,13 @@ def add_lidar(num_envs: int = 1, debug: bool = False) -> None:
     if not timeline.is_playing():
         timeline.play()
         _update_app_once()
+    scans = []
     for i in range(num_envs):
         parent = f"/World/envs/env_{i}/Robot/base"
+        # The frame of reference is set at creation: Isaac does not change it at runtime.
         lidar = LidarRtx(prim_path=f"{parent}/lidar_sensor", translation=tuple(LIVOX_OFFSET_BASE),
-                         orientation=(1.0, 0.0, 0.0, 0.0), config_file_name="Example_Rotary")
+                         orientation=(1.0, 0.0, 0.0, 0.0), config_file_name="Example_Rotary",
+                         **{"omni:sensor:Core:outputFrameOfReference": "WORLD" if world_frame else "SENSOR"})
         lidar.initialize()
         _keep_alive.append(lidar)
         prim = omni.usd.get_context().get_stage().GetPrimAtPath(lidar.prim_path)
@@ -132,11 +147,51 @@ def add_lidar(num_envs: int = 1, debug: bool = False) -> None:
             stacks = [np.sort(np.clip(base + rng.normal(0.0, 0.45, 32).astype(np.float32), -15.0, 45.0))
                       for _ in range(4)]
             elevation.Set(np.concatenate(stacks).tolist())
-        _lidar_graph(i, lidar)
+        if world_frame:
+            scans.append(WorldScan(lidar))
+        else:
+            _lidar_graph(i, lidar)
         _lidar_render_products.append(lidar.get_render_product_path())
-    _lidar_debug["enabled"] = debug
+    _lidar_debug["enabled"], _lidar_debug["world"] = debug, world_frame
     if debug:
         _toggle_debug_writer(True)
+    return scans
+
+
+class WorldScan:
+    """A lidar's finished scans in WORLD coordinates, off Isaac's scan buffer, which holds the last one."""
+
+    def __init__(self, lidar):
+        import omni.replicator.core as rep
+
+        self.annotator = rep.AnnotatorRegistry.get_annotator("IsaacCreateRTXLidarScanBuffer")
+        # The timestamps only tell one finished scan from the next.
+        self.annotator.initialize(outputIntensity=True, outputTimestamp=True)
+        self.annotator.attach([lidar.get_render_product_path()])
+        self._last = None
+
+    def take(self):
+        """(points in the world, float64 Nx3; intensity, float32 N) of a scan not taken before, else None."""
+        data = self.annotator.get_data()
+        if not data or "data" not in data:
+            return None
+        points = np.asarray(data["data"])
+        if points.ndim != 2 or points.shape[0] == 0:
+            return None
+        # Isaac fills half as many timestamps as points, but they still change from one scan to the next; a hash
+        # of the points would not, for a robot lying still in a still world.
+        times = data.get("timestamp")
+        if times is not None and np.size(times) and np.any(times):
+            key = (points.shape[0], int(np.max(times)))
+        else:
+            key = (points.shape[0], hash(points[:64].tobytes()))
+        if key == self._last:
+            return None
+        self._last = key
+        intensity = data.get("intensity")
+        if intensity is None or np.size(intensity) != points.shape[0]:
+            intensity = np.zeros(points.shape[0], dtype=np.float32)
+        return points.astype(np.float64), np.asarray(intensity, dtype=np.float32).reshape(-1)
 
 
 def _toggle_debug_writer(on: bool):
@@ -145,7 +200,9 @@ def _toggle_debug_writer(on: bool):
     if _lidar_debug["writer"] is None:
         _lidar_debug["writer"] = rep.writers.get("RtxLidarDebugDrawPointCloud")
     if on:
-        _lidar_debug["writer"].attach(_lidar_render_products)
+        # Its points come in the lidar's frame of reference, with the lidar's pose to move them by. WORLD points are
+        # already where they belong.
+        _lidar_debug["writer"].attach(_lidar_render_products, doTransform=not _lidar_debug["world"])
     else:
         _lidar_debug["writer"].detach()
 
@@ -171,14 +228,14 @@ def sim_time_msg(seconds: float):
 class SimNode:
     """The sim's ROS node, `go2_driver_node` as before, so VIP-Rescue's launch files still find it."""
 
-    def __init__(self, num_envs: int, on_cmd_vel, on_level=None, on_teleport=None):
+    def __init__(self, num_envs: int, on_cmd_vel, on_level=None, on_teleport=None, scans=()):
         import rclpy
         from rcl_interfaces.msg import SetParametersResult
         from geometry_msgs.msg import PoseStamped, TransformStamped, Twist
         from nav_msgs.msg import Odometry
         from rclpy.qos import DurabilityPolicy, QoSProfile
         from rosgraph_msgs.msg import Clock
-        from sensor_msgs.msg import Imu, JointState
+        from sensor_msgs.msg import Imu, JointState, PointCloud2, PointField
         from std_msgs.msg import String
         from tf2_ros import TransformBroadcaster
         from tf2_ros.static_transform_broadcaster import StaticTransformBroadcaster
@@ -195,6 +252,11 @@ class SimNode:
         self._Clock = Clock
         self.joint_pub = node.create_publisher(JointState, "/joint_states", qos)
         self.imu_pub = node.create_publisher(Imu, IMU_TOPIC, qos)
+        self.scans = list(scans)          # add_lidar's WorldScans, one a robot; none when Isaac publishes the lidar
+        self.cloud_pub = node.create_publisher(PointCloud2, LIDAR_TOPIC, qos) if self.scans else None
+        self._PointCloud2 = PointCloud2
+        self._cloud_fields = [PointField(name=name, offset=4 * k, datatype=PointField.FLOAT32, count=1)
+                              for k, name in enumerate(("x", "y", "z", "intensity"))]
         self.cup_pub = node.create_publisher(PoseStamped, "/sim/cup_pose", qos)
         self.robot_pose_pub = node.create_publisher(PoseStamped, "/sim/robot_pose", qos)
         # Latched, so a script that starts after the last change still hears it.
@@ -280,8 +342,11 @@ class SimNode:
             joints.name = list(data.joint_names)
             joints.position = [float(v) for v in data.joint_pos[i].detach().cpu().tolist()]
             self.joint_pub.publish(joints)
-            self._odom(i, data.root_state_w[i, :3].detach().cpu().numpy(),
-                       data.root_state_w[i, 3:7].detach().cpu().numpy(), stamp)
+            pos = data.root_state_w[i, :3].detach().cpu().numpy()
+            quat = data.root_state_w[i, 3:7].detach().cpu().numpy()
+            self._odom(i, pos, quat, stamp)
+            if i < len(self.scans):
+                self._cloud(self.scans[i], pos, quat, stamp)
         self._imu(sim_time_s, data, stamp)
         self._publish_pose(self.robot_pose_pub, stamp, data.root_pos_w[0], data.root_quat_w[0])
         if cup is not None:
@@ -356,6 +421,27 @@ class SimNode:
         pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w = (float(v) for v in q)
         if self.odom_pub is not None:
             self.odom_pub.publish(odom)
+
+    def _cloud(self, scan, pos, quat_wxyz, stamp) -> None:
+        """A finished WORLD scan, in livox_frame at the pose `_odom` has just put on TF for this same stamp."""
+        taken = scan.take()
+        if taken is None:
+            return
+        points_w, intensity = taken
+        rot = Rotation.from_quat([quat_wxyz[1], quat_wxyz[2], quat_wxyz[3], quat_wxyz[0]])
+        lidar_pos = pos.astype(np.float64) + rot.apply(LIVOX_OFFSET_BASE)
+        points = (points_w - lidar_pos) @ rot.as_matrix()           # rows: R^T (p - t)
+        ok = np.isfinite(points).all(axis=1)
+        cloud = np.empty((int(ok.sum()), 4), dtype=np.float32)
+        cloud[:, :3], cloud[:, 3] = points[ok], intensity[ok]
+        msg = self._PointCloud2()
+        msg.header.stamp, msg.header.frame_id = stamp, "livox_frame"
+        msg.height, msg.width = 1, cloud.shape[0]
+        msg.fields = self._cloud_fields
+        msg.is_bigendian, msg.point_step, msg.row_step, msg.is_dense = False, 16, 16 * cloud.shape[0], True
+        # array('B'), never bytes: rclpy checks a bytes value element by element in Python (22 ms a scan in P2Dingo).
+        msg.data = array.array("B", cloud.tobytes())
+        self.cloud_pub.publish(msg)
 
     # ------------------------------------------------------------------ photos and video
     def _photo(self, msg):

@@ -213,7 +213,7 @@ Two renderer limits come with it, as in D1Training:
 | `/clock` | Sim time; everything is stamped with it |
 | `/joint_states` | All 20 joints |
 | `/odom`, TF `odom → livox_frame`, static `odom → map` | Re-zeroed at startup and on every load. `ros2 param set /go2_driver_node publish_map_odom false` stops them |
-| `/glim_rosnode/points` | The RTX lidar, as before |
+| `/glim_rosnode/points` | The RTX lidar, 50 scans a second, in `livox_frame`, with intensity. Each scan is traced in the world and put back in `livox_frame` at the pose the TF gives for its stamp, so a turning robot's walls stay where they are in `odom`, as P2Dingo's sim does. Isaac's own cloud was stamped 0.08 s ahead of the TF and swung the walls round 4° in a 1.25 rad/s turn. `--no-world-lidar` puts it back |
 | `/livox/imu` | Orientation, angular velocity and specific force at the lidar, at the policy rate. It is computed, because the old native IMU sensor was never created (Isaac logs "Could not create Imu sensor prim" and carries on) |
 | `robot0/cmd_vel` | Velocity command, while standing |
 | `/sim/level` | See [Levels](#levels) |
