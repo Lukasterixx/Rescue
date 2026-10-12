@@ -1,33 +1,43 @@
-"""The competition's arenas for VIP-Rescue's website: a 3D model of each, in its own frame, and the walls a robot
-there aligns its route to.
+"""The competition's arenas for VIP-Rescue's website: a 3D model of each, in its own frame, and its terrain, which
+the Routes tab draws routes over and the robot aligns them to.
 
     python3 -m competition.web_export                       # into $VIP_RESCUE_ROOT (default ~/VIP-Rescue)
     python3 -m competition.web_export --out /some/maps/dir  # or anywhere
 
 It writes, under the website's `maps/` directory:
-  arenas/index.json       every arena: title, model, walls, start pose, START/END markers, bounds
-  arenas/<key>.glb        the arena's meshes (glTF 2.0, one primitive per colour), in the arena's frame
-  arenas/<key>.walls.json the arena's walls: 5 cm cells where something stands 0.65-3.0 m above the floor the robot
-                          starts on, the height band VIP-Rescue's flatten_node draws /map2d from
-  routes/krail_square.json the K-Rail Square's course route (training/measure_square.py's), as a route file
+  arenas/index.json          every arena: title, model, terrain, start pose, START/END markers, bounds
+  arenas/<key>.glb           the arena's meshes (glTF 2.0, one primitive per colour), in the arena's frame
+  arenas/<key>.terrain.json  the arena's terrain (below), on a 5 cm grid in the arena's frame
+  routes/krail_square.json   the K-Rail Square's course route (training/measure_square.py's), as a route file
 
 THE ARENA'S FRAME is the lane's origin with the world's axes (`rescue_sim.levels.Level.origin`): for the K-Rail
 Square its centre, +x east, +y north. The rescue sim's `/sim/teleport` takes poses in it, and a route drawn on the
 model is in it. glTF is +y up, so the models are stored turned (x, z, -y); a viewer turns them back with a +90 deg
 rotation about x.
 
-THE WALLS are sampled from the collision meshes, every face of them (a horizontal one in the band, such as the
-stairs' landing, is a wall to /map2d too). The band is measured from the start floor (the spawn's height less the
-0.42 m it drops the robot from): flatten_node keeps points from 0.3 m above the robot's base, and the base stands
-about 0.35 m above the floor. The maze's tarp is left out of the model, so the maze can be seen from above, but not
-out of the walls.
+THE TERRAIN ("vip-rescue.terrain/1") is, for every 5 cm cell:
+  levels  the heights the robot can stand at there: the top of a walkable surface (a `scan` mesh: floors, decks,
+          K-rails, treads, the stairs' landing, pallet tops, pads; or the hall floor) with HEADROOM_M clear above it,
+          so the floor under a deck is not one and the floor under the stairs' landing is. A cell keeps a level only
+          if each of its four 2.5 cm columns can stand within MAX_STEP_M of it: a 5 cm railing member blocks a cell,
+          a deck's edge does not.
+  solids  the heights something stands at there, from every collision mesh, cut into 2.5 cm vertical columns
+          (a closed mesh's crossings pair up into its insides) and merged over the cell's columns.
+From these the website follows a route's height over the arena (a robot base BASE_HEIGHT_M above where it stands),
+finds what it cannot walk onto, and finds the walls: in the band /map2d is drawn from, WALL_BAND_M above the surface
+the robot stands on (flatten_node keeps points from 0.3 m above the base). A route aligns to what that band holds as
+seen from the route's start, floors included (`alignment_walls`): a landing above the band is occupied in /map2d
+seen from the floor, so it is in the walls the robot aligns to, though not one the route is checked against.
 
-Left out: the gravel lane's 7,800 loose stones (its gravel surface stays), textures (each material is its colour).
+The maze's tarp is left out of the model, so the maze can be seen from above, but not out of the terrain. Left out of
+both: the gravel lane's 7,800 loose stones (its gravel surface stays), textures (each material is its colour).
 No Isaac imports: the system python3 runs it.
 """
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import json
 import math
 import os
@@ -38,13 +48,18 @@ import numpy as np
 
 from .geometry import COLORS, Options, build_lanes
 
-SCHEMA = "vip-rescue.arenas/1"
+SCHEMA = "vip-rescue.arenas/2"
+TERRAIN_SCHEMA = "vip-rescue.terrain/1"
 ROUTE_SCHEMA = "vip-rescue.route/1"
-WALL_CELL_M = 0.05
-WALL_BAND_M = (0.65, 3.0)            # above the start floor
+CELL_M = 0.05                        # the terrain's grid
+COLUMN_M = 0.025                     # the columns the meshes are cut into: two to a cell each way
+BASE_HEIGHT_M = 0.33                 # base_link over the surface the Go2 stands on (0.332 m in the rescue sim)
+MAX_STEP_M = 0.25                    # the highest step a route may climb or drop in one go
+HEADROOM_M = 0.5                     # clear height a level needs over it (crouching under the stairs' landing fits)
+WALL_BAND_M = (0.65, 3.0)            # /map2d's band, over the surface the robot stands on
+MARGIN_M = 0.5                       # hall floor kept round the arena
 SPAWN_DROP_M = 0.42                  # the spawn's height above the floor it stands on
-SAMPLE_SPACING_M = 0.015
-HIDDEN_MATERIALS = {"tarp"}          # in the walls, not in the model
+HIDDEN_MATERIALS = {"tarp"}          # in the terrain, not in the model
 # The K-Rail Square's course route and start, in its frame (training/measure_square.py, ROUTE).
 SQUARE_ROUTE = [(-1.85, 0.6), (-0.75, 0.6), (-0.15, 0.85), (0.25, 0.85), (1.0, -0.3), (1.0, -0.65), (1.9, -0.65),
                 (1.9, 0.9)]
@@ -122,38 +137,132 @@ def model_groups(lane) -> dict[str, tuple[np.ndarray, np.ndarray]]:
     return groups
 
 
-# ------------------------------------------------------------------------------------------ the walls
-def surface_samples(vertices: np.ndarray, faces: np.ndarray, spacing: float = SAMPLE_SPACING_M) -> np.ndarray:
-    """Points over every face, about `spacing` apart (a regular barycentric grid per triangle)."""
-    out = []
-    for a, b, c in vertices[faces]:
-        n = max(1, int(math.ceil(max(np.linalg.norm(b - a), np.linalg.norm(c - a), np.linalg.norm(c - b)) / spacing)))
-        i, j = np.meshgrid(np.arange(n + 1), np.arange(n + 1), indexing="ij")
-        keep = i + j <= n
-        u, v = i[keep] / n, j[keep] / n
-        out.append(a + np.outer(u, b - a) + np.outer(v, c - a))
-    return np.concatenate(out) if out else np.zeros((0, 3))
-
-
-def wall_cells(lane) -> tuple[list[list[float]], float]:
-    """The arena's wall cells (centres, arena frame) and the start floor's height they are measured from."""
-    origin = np.asarray(lane.origin, dtype=float)
-    floor = lane.spawn[2] - SPAWN_DROP_M - origin[2]
-    low, high = floor + WALL_BAND_M[0], floor + WALL_BAND_M[1]
-    cells = set()
+# ------------------------------------------------------------------------------------------ the terrain
+def _columns(lane, origin, x0, y0, nx, ny):
+    """Every collision mesh cut into vertical columns COLUMN_M apart: {(i, j): [(z0, z1, scan), ...]}, the solids
+    along the column at (x0 + (i + 0.5) COLUMN_M, y0 + (j + 0.5) COLUMN_M)."""
+    columns: dict[tuple[int, int], list] = {}
     for mesh in lane.meshes:
         if not mesh.collision:
             continue
-        vertices = mesh.vertices - origin
-        z = vertices[:, 2]
-        if z.max() < low or z.min() > high:
+        crossings: dict[tuple[int, int], list[float]] = {}
+        for a, b, c in mesh.vertices[mesh.faces] - origin:
+            det = (b[1] - c[1]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[1] - c[1])
+            if abs(det) < 1e-12:
+                continue                                  # a vertical face: the faces above and below bound the solid
+            xs, ys = (a[0], b[0], c[0]), (a[1], b[1], c[1])
+            i0 = max(0, math.ceil((min(xs) - x0) / COLUMN_M - 0.5))
+            i1 = min(nx - 1, math.floor((max(xs) - x0) / COLUMN_M - 0.5))
+            j0 = max(0, math.ceil((min(ys) - y0) / COLUMN_M - 0.5))
+            j1 = min(ny - 1, math.floor((max(ys) - y0) / COLUMN_M - 0.5))
+            if i1 < i0 or j1 < j0:
+                continue
+            I, J = np.meshgrid(np.arange(i0, i1 + 1), np.arange(j0, j1 + 1), indexing="ij")
+            X, Y = x0 + (I + 0.5) * COLUMN_M, y0 + (J + 0.5) * COLUMN_M
+            l0 = ((b[1] - c[1]) * (X - c[0]) + (c[0] - b[0]) * (Y - c[1])) / det
+            l1 = ((c[1] - a[1]) * (X - c[0]) + (a[0] - c[0]) * (Y - c[1])) / det
+            l2 = 1.0 - l0 - l1
+            inside = (l0 >= -1e-9) & (l1 >= -1e-9) & (l2 >= -1e-9)
+            Z = l0 * a[2] + l1 * b[2] + l2 * c[2]
+            for i, j, z in zip(I[inside].tolist(), J[inside].tolist(), Z[inside].tolist()):
+                crossings.setdefault((i, j), []).append(z)
+        for key, zs in crossings.items():
+            zs = sorted(zs)
+            unique = [z for k, z in enumerate(zs) if k == 0 or z - zs[k - 1] > 1e-6]   # an edge two faces share
+            if len(unique) % 2:
+                pairs = [(z, z) for z in unique]          # not closed: each crossing a sheet
+            else:
+                pairs = list(zip(unique[0::2], unique[1::2]))
+            columns.setdefault(key, []).extend((z0, z1, mesh.scan) for z0, z1 in pairs)
+    return columns
+
+
+def _levels(solids) -> list[float]:
+    """Where a column can be stood on: the hall floor and the walkable tops, each with HEADROOM_M clear over it."""
+    tops = [0.0] + [z1 for _, z1, scan in solids if scan]
+    out = []
+    for top in sorted(set(round(t, 3) for t in tops)):
+        if top < 0.0:
             continue
-        points = surface_samples(vertices, mesh.faces)
-        points = points[(points[:, 2] >= low) & (points[:, 2] <= high)]
-        for x, y in np.floor(points[:, :2] / WALL_CELL_M).astype(int):
-            cells.add((int(x), int(y)))
-    centres = sorted(((x + 0.5) * WALL_CELL_M, (y + 0.5) * WALL_CELL_M) for x, y in cells)
-    return [[round(x, 3), round(y, 3)] for x, y in centres], floor
+        clear = all(z1 <= top + 0.02 or z0 >= top + HEADROOM_M for z0, z1, _ in solids)
+        if clear:
+            out.append(top)
+    return out
+
+
+def _merge(intervals, gap: float = 0.02) -> list[tuple[float, float]]:
+    out: list[list[float]] = []
+    for z0, z1 in sorted(intervals):
+        if out and z0 <= out[-1][1] + gap:
+            out[-1][1] = max(out[-1][1], z1)
+        else:
+            out.append([z0, z1])
+    return [(a, b) for a, b in out]
+
+
+def terrain(lane) -> dict:
+    """The lane's terrain (module docstring): its grid and, per cell, its levels and solids."""
+    origin = np.asarray(lane.origin, dtype=float)
+    xy = np.concatenate([m.vertices[:, :2] for m in lane.meshes]) - origin[:2]
+    x0 = math.floor((xy[:, 0].min() - MARGIN_M) / CELL_M) * CELL_M
+    y0 = math.floor((xy[:, 1].min() - MARGIN_M) / CELL_M) * CELL_M
+    width = math.ceil((xy[:, 0].max() + MARGIN_M - x0) / CELL_M)
+    height = math.ceil((xy[:, 1].max() + MARGIN_M - y0) / CELL_M)
+    sub = int(round(CELL_M / COLUMN_M))
+    columns = _columns(lane, origin, x0, y0, width * sub, height * sub)
+    levels, solids = [], []
+    for j in range(height):
+        for i in range(width):
+            cols = [columns.get((i * sub + di, j * sub + dj), []) for di in range(sub) for dj in range(sub)]
+            col_levels = [_levels(c) for c in cols]
+            cell = []
+            for level in sorted({z for lv in col_levels for z in lv}, reverse=True):
+                if all(any(abs(z - level) <= MAX_STEP_M for z in lv) for lv in col_levels) and \
+                        not any(abs(level - kept) < 0.03 for kept in cell):
+                    cell.append(level)
+            levels.append(sorted(cell))
+            solids.append(_merge([(z0, z1) for c in cols for z0, z1, _ in c]))
+    return {"x0": x0, "y0": y0, "width": width, "height": height, "levels": levels, "solids": solids}
+
+
+def _pack(lists, per_item: int) -> dict:
+    """Variable-length lists of heights as two base64 arrays: a count per cell (uint8) and the heights in cm (int16)."""
+    counts = np.array([len(item) // per_item if per_item > 1 else len(item) for item in lists], dtype="u1")
+    flat = [v for item in lists for v in item]
+    z = np.round(np.asarray(flat, dtype=float) * 100).astype("<i2")
+    return {"counts": base64.b64encode(counts.tobytes()).decode(), "z_cm": base64.b64encode(z.tobytes()).decode()}
+
+
+def terrain_json(grid: dict, frame: str) -> dict:
+    return {
+        "schema": TERRAIN_SCHEMA, "frame": frame, "resolution": CELL_M,
+        "x0": round(grid["x0"], 4), "y0": round(grid["y0"], 4), "width": grid["width"], "height": grid["height"],
+        "base_height": BASE_HEIGHT_M, "max_step": MAX_STEP_M, "headroom": HEADROOM_M, "wall_band": list(WALL_BAND_M),
+        "outside_level": 0.0,
+        "levels": _pack(grid["levels"], 1),
+        "solids": _pack([[z for pair in cell for z in pair] for cell in grid["solids"]], 2),
+    }
+
+
+def _cell(grid: dict, x: float, y: float):
+    i, j = math.floor((x - grid["x0"]) / CELL_M), math.floor((y - grid["y0"]) / CELL_M)
+    if 0 <= i < grid["width"] and 0 <= j < grid["height"]:
+        return j * grid["width"] + i
+    return None
+
+
+def alignment_walls(grid: dict, start: dict) -> list[list[float]]:
+    """What /map2d shows from the route's start: the cells with a solid in WALL_BAND_M over the surface the robot
+    starts on (its highest level there), floors included."""
+    index = _cell(grid, start["x"], start["y"])
+    here = grid["levels"][index] if index is not None and grid["levels"][index] else [0.0]
+    low, high = here[-1] + WALL_BAND_M[0], here[-1] + WALL_BAND_M[1]
+    out = []
+    for k, cell in enumerate(grid["solids"]):
+        if any(z0 <= high and z1 >= low for z0, z1 in cell):
+            j, i = divmod(k, grid["width"])
+            out.append([round(grid["x0"] + (i + 0.5) * CELL_M, 3), round(grid["y0"] + (j + 0.5) * CELL_M, 3)])
+    return out
 
 
 # ------------------------------------------------------------------------------------------ the index
@@ -191,46 +300,49 @@ def export(maps_dir: Path, options: Options = Options(gravel="static")) -> dict:
     arenas_dir = maps_dir / "arenas"
     arenas_dir.mkdir(parents=True, exist_ok=True)
     index = {"schema": SCHEMA, "generator": "Rescue Isaac/go2_omniverse/competition/web_export.py",
-             "wall_band_m": list(WALL_BAND_M), "wall_cell_m": WALL_CELL_M, "arenas": []}
+             "resolution": CELL_M, "arenas": []}
+    grids = {}
     for lane in lanes:
         groups = model_groups(lane)
-        (arenas_dir / f"{lane.key}.glb").write_bytes(glb(groups))
-        cells, floor = wall_cells(lane)
-        (arenas_dir / f"{lane.key}.walls.json").write_text(json.dumps(
-            {"schema": "vip-rescue.walls/1", "frame": f"arena {lane.key}", "resolution": WALL_CELL_M,
-             "band": [round(floor + WALL_BAND_M[0], 3), round(floor + WALL_BAND_M[1], 3)], "floor_z": round(floor, 3),
-             "cells": cells}, separators=(",", ":")) + "\n")
+        model = glb(groups)
+        (arenas_dir / f"{lane.key}.glb").write_bytes(model)
+        grid = grids[lane.key] = terrain(lane)
+        (arenas_dir / f"{lane.key}.terrain.json").write_text(
+            json.dumps(terrain_json(grid, f"arena {lane.key}"), separators=(",", ":")) + "\n")
         everything = np.concatenate([v for v, _ in groups.values()])
         origin = np.asarray(lane.origin, dtype=float)
+        floor = lane.spawn[2] - SPAWN_DROP_M - origin[2]
         index["arenas"].append({
             "id": lane.key, "title": lane.title, "group": lane.arena, "setting": lane.setting,
             "subtitle": getattr(lane, "subtitle", ""),
-            "model": f"arenas/{lane.key}.glb", "walls": f"arenas/{lane.key}.walls.json",
+            "model": f"arenas/{lane.key}.glb", "terrain": f"arenas/{lane.key}.terrain.json",
+            "version": hashlib.sha1(model).hexdigest()[:10],
             "floor_z": round(floor, 3),
             "start": {"x": round(lane.spawn[0] - origin[0], 3), "y": round(lane.spawn[1] - origin[1], 3),
                       "yaw_deg": round(yaw_deg(lane.spawn_rotation), 2)},
             "bounds": [round(float(v), 3) for v in (*everything[:, :2].min(axis=0), *everything[:, :2].max(axis=0))],
-            "markers": markers(lane), "wall_cells": len(cells),
+            "markers": markers(lane),
+            "walkable_cells": sum(bool(levels) for levels in grid["levels"]),
         })
     (arenas_dir / "index.json").write_text(json.dumps(index, indent=1) + "\n")
     square = next(a for a in index["arenas"] if a["id"] == "square")
-    walls = json.loads((arenas_dir / "square.walls.json").read_text())
     routes_dir = maps_dir / "routes"
     routes_dir.mkdir(parents=True, exist_ok=True)
     (routes_dir / "krail_square.json").write_text(json.dumps(route_file(
-        "K-Rail Square course", square, SQUARE_ROUTE, walls), indent=1) + "\n")
+        "K-Rail Square course", square, SQUARE_ROUTE, grids["square"]), indent=1) + "\n")
     return index
 
 
-def route_file(name: str, arena: dict, waypoints, walls: dict) -> dict:
-    """A route file (VIP-Rescue's route/route_file.hpp reads it) on an arena, with the arena's walls in it."""
+def route_file(name: str, arena: dict, waypoints, grid: dict) -> dict:
+    """A route file (VIP-Rescue's route/route_file.hpp reads it) on an arena, with the walls the robot aligns to from
+    its start (`alignment_walls`). The Routes tab writes the same."""
     return {
         "schema": ROUTE_SCHEMA, "name": name,
         "reference": {"kind": "arena", "id": arena["id"], "title": arena["title"]},
         "start": arena["start"],
         "waypoints": [[float(x), float(y)] for x, y in waypoints],
         "speed": 0.5,
-        "walls": {"resolution": walls["resolution"], "band": walls["band"], "cells": walls["cells"]},
+        "walls": {"resolution": CELL_M, "seen_from": "start", "cells": alignment_walls(grid, arena["start"])},
     }
 
 
@@ -245,8 +357,9 @@ def main(argv=None):
     total = sum((args.out / a["model"]).stat().st_size for a in index["arenas"])
     print(f"[web_export] {len(index['arenas'])} arenas into {args.out / 'arenas'} ({total / 1e6:.1f} MB of models)")
     for arena in index["arenas"]:
-        print(f"[web_export]   {arena['id']:22s} {arena['wall_cells']:5d} wall cells, start "
-              f"({arena['start']['x']}, {arena['start']['y']}, {arena['start']['yaw_deg']} deg)")
+        size = (args.out / arena["terrain"]).stat().st_size
+        print(f"[web_export]   {arena['id']:22s} {arena['walkable_cells']:6d} walkable cells ({size / 1e3:.0f} kB), "
+              f"start ({arena['start']['x']}, {arena['start']['y']}, {arena['start']['yaw_deg']} deg)")
 
 
 if __name__ == "__main__":
