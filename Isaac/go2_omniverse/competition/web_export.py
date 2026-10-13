@@ -341,7 +341,7 @@ def route_file(name: str, arena: dict, waypoints, grid: dict) -> dict:
         "reference": {"kind": "arena", "id": arena["id"], "title": arena["title"]},
         "start": arena["start"],
         "waypoints": [[float(x), float(y)] for x, y in waypoints],
-        "speed": 0.5,
+        "speed": 0.75,
         "walls": {"resolution": CELL_M, "seen_from": "start", "cells": alignment_walls(grid, arena["start"])},
     }
 
