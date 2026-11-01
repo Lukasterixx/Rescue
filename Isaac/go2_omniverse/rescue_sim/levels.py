@@ -16,7 +16,7 @@ No Isaac imports: the runtime that applies these lives in `runtime.py`.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 
 import numpy as np
@@ -30,6 +30,9 @@ LYING_LEG_POSE = {
 }
 # Above where the folded legs rest, so the robot settles rather than starts inside the floor.
 LYING_SPAWN_HEIGHT_M = 0.18
+# The Go2-W lies on its wheels: folded, its axles are 0.107 m under the hips and the wheels 0.086 m round them, so the
+# base rests 0.19 m up where the Go2's rests on its feet at about 0.13.
+GO2W_LYING_SPAWN_HEIGHT_M = 0.21
 
 # D1Training run_pick_demo defaults: the cup in the lying robot's base frame, and the cup itself.
 CUP_XY_B = (0.42, 0.03)
@@ -95,8 +98,14 @@ CUP_DEMO = Level(
 )
 
 
-def catalogue(lanes) -> list[Level]:
-    return competition_levels(lanes) + [CUP_DEMO]
+def catalogue(lanes, robot: str = "go2") -> list[Level]:
+    """The levels for `robot` ("go2" or "go2w"): the lanes, whose spawns stand either robot 1-2 cm over the floor,
+    and the cup demo, whose lying robot starts just over where it rests."""
+    cup = CUP_DEMO
+    if robot == "go2w":
+        cup = replace(CUP_DEMO, spawn=(*CUP_DEMO.spawn[:2], GO2W_LYING_SPAWN_HEIGHT_M),
+                      subtitle=CUP_DEMO.subtitle.replace("the Go2 lying", "the Go2-W lying on its wheels"))
+    return competition_levels(lanes) + [cup]
 
 
 def rows(levels) -> list[tuple[str, list[int]]]:

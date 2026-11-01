@@ -1,20 +1,45 @@
 # The rescue sim
 
-This is the Go2 with its D1 arm and wrist RealSense, in the RoboCup Rescue competition's lanes, plus D1Training's cup demo. It is the only sim in this repository.
+This is the Go2-W, the wheeled Go2, with its D1 arm and wrist RealSense, in the RoboCup Rescue competition's lanes, plus D1Training's cup demo. `--robot go2` puts the legged Go2 back in its place. It is the only sim in this repository.
 
 ```bash
 cd ~/Rescue/Isaac/go2_omniverse
 ./run_sim.sh                               # windowed, starting on the Shifty Gravel lane
+./run_sim.sh --robot go2                   # the legged Go2 instead of the Go2-W, with its own policy
 ./run_sim.sh --level cup                   # start in the cup demo
 ./run_sim.sh --level stairs                # clear stairs and pallet climb
 ./run_sim.sh --level stair_debris          # debris stairs, red braces and pallet climb
 ./run_sim.sh --level ramps_obstacles       # sloped ramps with rotating slip disks and pinch points
 ./run_sim.sh --headless --smoke-steps 800  # load every level, lie down, stand up and walk, then exit
-./run_sim.sh --policy policies/go2_policies_2026-09-18/rough  # walk with another policy (see Walking policies)
+./run_sim.sh --robot go2 --policy policies/go2_policies_2026-09-18/rough  # another Go2 policy (see Walking policies)
 ./run_sim.sh --help                        # every option
 ```
 
 The VIP-Rescue website's Dev tab launches the same `run_sim.sh`.
+
+## The robot
+
+`--robot` picks it, and everything else stays the same: the D1 on the same mount, the camera, the lanes, the ROS
+topics and the sim's API.
+
+| | `go2w` (the default since 2026-11-01) | `go2` |
+| --- | --- | --- |
+| Model | Unitree's `go2w_description` (`../go2w_description/`, `../go2w.py`) | Isaac Lab's Go2 |
+| Below each knee | A hub motor and a 0.172 m wheel, velocity-driven (kd 0.5, 23.5 N·m, 30 rad/s) | A foot |
+| Mass with the D1 | 22.7 kg | 18.2 kg |
+| Standing pose | Hips 0, thighs 0.8, calves −1.5: the base 0.32 m over the axles, 0.41 m over the ground | Hips ±0.1, thighs 0.8 front and 1.0 rear, calves −1.5: the base 0.33 m over the feet |
+| Joints | 24: the Go2's 12 legs, 4 wheels (`*_foot_joint`), the arm's 8 | 20 |
+| Walking policy | `policies/go2w_krail_2026-11-01`, 16 actions: the legs, then the wheels | `policies/go2_krail_2026-10-13`, 12 actions |
+
+The Go2-W's trunk and leg joints are the Go2's, named and ordered the same, and its legs have the same motor model
+(Unitree's Go2 HV curve, kp 25, kd 0.5), so a leg term means the same thing on either robot. A policy runs only on
+the robot it was trained on: the sim refuses a Go2 policy on the Go2-W and the other way round, with the `--robot`
+to add. `--policy agent_cfg` is a Go2 policy. `../go2w_description/README.md` says what the sim changes in Unitree's
+model and why (the colliders), and what it leaves weaker than the URDF (the knee).
+
+The Go2-W lies down on its wheels: in the lying pose its base rests about 0.19 m up, where the Go2's rests on its feet
+at about 0.13, so in the cup demo the arm reaches the mug from 6 cm higher than in D1Training's scene. While the robot
+lies down, stands up or lies still, the wheels are held at zero speed.
 
 ## Levels
 
@@ -41,7 +66,7 @@ The **Rescue sim** window opens as a tab beside the Stage panel, with a row for 
 | Stairs \| Pallet Climb | Clear | `stairs` | A clear 45° stair to a landing, pallet climb, supported side rails and two belay frames |
 | | Debris | `stair_debris` | The same arena with yellow/orange/red beams leaning from treads to side supports, plus red diagonals crossing the path above and below the landing |
 | Search & Map Maze | | `maze` | The guide's example maze under a blackout tarp |
-| Cup demo | | `cup` | D1Training's pick scene: the Go2 lying down, a 55 × 100 mm mug 42 cm ahead |
+| Cup demo | | `cup` | D1Training's pick scene: the robot lying down, a 55 × 100 mm mug 42 cm ahead |
 
 All but the cup demo are the competition's lanes from `../competition/`, whose README gives the fabrication details, what is our own reading of the guide, and the options that change them (`--layered-k-rail-height`, `--stair-angle`, and others). The sloped and obstacle copies stand at the far end of the hall, past the maze, but share their arena's row. `--difficulty slopes` now tilts only gravel and pallets, which have no sloped level of their own. A lane added there becomes a level here.
 
@@ -107,15 +132,27 @@ trial.
 
 ## Walking policies
 
-By default (since 2026-10-12) the legs are walked by the exported K-Rail Square policy, since 2026-10-13 `policies/go2_krail_2026-10-13` (`sim.py`, `DEFAULT_POLICY`). `--policy DIR` walks them with another exported policy; `DIR` holds `policy.pt` (TorchScript) and `params/deploy.yaml`, and is absolute or relative to this directory. `--policy agent_cfg` walks them with the rsl_rl checkpoint `agent_cfg.py` names, the 2026-09-15 flat policy, which was the default until then; that file's header has its measurements and its own rollbacks.
+Each robot is walked by default by its own exported K-Rail Square policy (`sim.py`, `DEFAULT_POLICIES`): the Go2-W
+since 2026-11-01 by `policies/go2w_krail_2026-11-01`, the Go2 since 2026-10-12 by its own, since 2026-10-13
+`policies/go2_krail_2026-10-13`. `--policy DIR` walks the robot with another exported policy; `DIR` holds `policy.pt` (TorchScript) and `params/deploy.yaml`, and is absolute or relative to this directory. A policy drives only the robot it was trained on: the sim stops, naming the `--robot` to add, if they differ. `--robot go2 --policy agent_cfg` walks the Go2 with the rsl_rl checkpoint `agent_cfg.py` names, the 2026-09-15 flat policy, which was the default until 2026-10-12; that file's header has its measurements and its own rollbacks.
 
 ```bash
-./run_sim.sh --level square                                    # the default: 741 wide, steps, K-rails, the K-Rail Square
-./run_sim.sh --policy policies/go2_krail_2026-10-12            # the same policy before it learnt to stop on four feet
-./run_sim.sh --policy agent_cfg                                # the 2026-09-15 flat policy, 235 wide
-./run_sim.sh --policy policies/go2_policies_2026-09-18/flat    # 45 wide: IMU, joints, command, last action
-./run_sim.sh --policy policies/go2_policies_2026-09-18/rough   # 232 wide: the same, plus a camera-masked height scan
+./run_sim.sh --level square                                    # the Go2-W's: 749 wide, 16 actions (legs, then wheels)
+./run_sim.sh --robot go2 --level square                        # the Go2's: 741 wide, steps, K-rails, the K-Rail Square
+./run_sim.sh --robot go2 --policy policies/go2_krail_2026-10-12   # the Go2's before it learnt to stop on four feet
+./run_sim.sh --robot go2 --policy agent_cfg                    # the 2026-09-15 flat policy, 235 wide
+./run_sim.sh --robot go2 --policy policies/go2_policies_2026-09-18/flat    # 45 wide: IMU, joints, command, last action
+./run_sim.sh --robot go2 --policy policies/go2_policies_2026-09-18/rough   # 232 wide: the same, plus a camera-masked height scan
 ```
+
+`policies/go2w_krail_2026-11-01/` was trained in this repository for the K-Rail Square on this sim's Go2-W
+(`../training/README.md`, "The Go2-W's K-Rail Square policy"), with the Go2 policy's final task from the start. It
+reads the Go2 policy's terms with the wheels' speeds after the legs' and a 16-wide last action, and gives 12 leg
+targets and then 4 wheel speeds. It went through the square 20 times in 20 (a second slower than the Go2's policy),
+10 in 10 at 0.3 and 0.8 m/s and with 15 and 20 cm rails, and climbs the training stairs as the Go2's does. It stands
+on all four wheels after every stop and never lifts its rear ones. It holds sideways commands to ±0.5 m/s (the Go2's
+±0.8). One weakness: turning on the spot straight out of a walk, it can slow to a third of the commanded rate for a
+second. Its README has the measurements beside the Go2 policy's.
 
 `policies/go2_krail_2026-10-12/` was trained in this repository for the K-Rail Square on this sim's own robot
 (`../training/README.md`, "The K-Rail Square policy"). It steps onto and off decks and over K-rails, and went through
@@ -141,12 +178,16 @@ The observation is built from the policy's own contract (`exported_policy.py`, `
 - **No action clip** from `agent_cfg.py`: neither policy trained with one. The flat policy's own ±100 sits on its action term.
 
 Before the policy gets the legs, the sim checks that it runs them as trained. If anything differs, it stops and lists what:
+- the robot it was trained on;
 - the leg terms in Isaac Lab order: the four hips (FL, FR, RL, RR), then the thighs, then the calves;
 - the default pose;
 - kp 25 and kd 0.5;
 - 50 Hz;
 - the observation width;
-- the action scale.
+- the action scale;
+- on the Go2-W, the wheels: their order (FL, FR, RL, RR), their action scale and their drive's gains;
+- the action's layout: the legs' 12, then any wheels' 4. A term's place in `env_cfg.ActionsCfg` does not settle it:
+  Isaac Lab's `configclass` puts annotated fields before bare ones, which once put the wheels first.
 
 The motor is already the one both trained with, Unitree's Go2 HV curve (`go2_actuators.py`). The startup log's `[policy]` lines say what was loaded.
 
@@ -221,7 +262,7 @@ Two renderer limits come with it, as in D1Training:
 | Topic | |
 | --- | --- |
 | `/clock` | Sim time; everything is stamped with it |
-| `/joint_states` | All 20 joints |
+| `/joint_states` | All 24 joints on the Go2-W (wheels included), 20 on the Go2 |
 | `/odom`, TF `odom → livox_frame`, static `odom → map` | Re-zeroed at startup and on every load. `ros2 param set /go2_driver_node publish_map_odom false` stops them |
 | `/glim_rosnode/points` | The RTX lidar, 50 scans a second, in `livox_frame`, with intensity. Each scan is traced in the world and put back in `livox_frame` at the pose the TF gives for its stamp, so a turning robot's walls stay where they are in `odom`, as P2Dingo's sim does. Isaac's own cloud was stamped 0.08 s ahead of the TF and swung the walls round 4° in a 1.25 rad/s turn. `--no-world-lidar` puts it back |
 | `/livox/imu` | Orientation, angular velocity and specific force at the lidar, at the policy rate. It is computed, because the old native IMU sensor was never created (Isaac logs "Could not create Imu sensor prim" and carries on) |
@@ -310,6 +351,26 @@ Slow is safe for the arm. Its 10 Hz command hold counts sim time, and the VIP-Re
   default when they were made. On the machine this one was trained on, `env_isaaclab` still had no `cyclonedds` on
   2026-10-14, so the sim would not start there.
 
+**Checked on 2026-11-01, the Go2-W:**
+- **The Go2-W is the default robot from this date, walked by `policies/go2w_krail_2026-11-01`** (`sim.py`,
+  `DEFAULT_ROBOT`, `DEFAULT_POLICIES`; `--robot go2` for the Go2 and its 2026-10-13 policy). The unit tests pass (90,
+  with the Go2-W's model, contract, mirror, lying spawn and bundle).
+- **The model.** Unitree's `go2w_description` converts and welds to the D1 as one articulation, 22.7 kg; its leg joints
+  resolve in the Go2's order, and the wheels are read and driven by name, FL, FR, RL, RR. Each wheel is a cylinder of the tyre's size: the mesh's
+  hull stood the axles 78-81 mm up instead of 86. `../go2w_description/README.md` has the rest.
+- **Smoke runs, both robots.** `--smoke-steps 1100 --arm-bridge off`, headless, with `--robot go2w` (the default) and
+  `--robot go2`. Both passed: all twenty levels loaded, the robot lay down in the cup demo, and it stood up and walked,
+  the Go2-W 2.25 m in 4.7 s on the gravel lane at 0.5 m/s (largest action 7.2), the Go2 2.18 m (7.75). They shared the
+  GPU with a measuring job, at 0.20x real time.
+- **`policies/go2w_krail_2026-11-01` through the K-Rail Square** (`../training/measure_square.py`, GPU physics): 20 of
+  20 routes at 0.5 m/s, 10 of 10 at 0.3 and 0.8, 10 of 10 with the rails at 15 cm and at 20 cm, none fell. Its README
+  has the rest, and the Go2's beside it.
+- **`measure_square.py` now starts each trial standing**, as the sim's level loader does; it had started every trial
+  from the USD's zero pose (legs straight), which the Go2's policies stood up from. The Go2's 2026-10-13 policy
+  measures the same as before through it (5 of 5, 19.2 s, CPU physics).
+- **Not checked: VIP-Rescue's missions with the Go2-W.** nav2 and the K-Rail Square tree have not driven it. They read
+  `/joint_states`, which now has the four wheel joints too (24 joints).
+
 **Not validated:**
 - The gait with the arm's drives and solver settings changed to D1Training's. The walking policy was trained with the stock ones; the smoke run shows it standing and walking, not how well it walks.
 - The exported policies anywhere but the gravel lane's start. The rough one's reason to exist is terrain: the stepfields, ramps and pallets are where it should do better than the flat policies, and whether it does is untested.
@@ -322,13 +383,14 @@ Slow is safe for the arm. Its 10 Hz command hold counts sim time, and the VIP-Re
 
 | File | |
 | --- | --- |
-| `sim.py` | Arguments, startup, the loop, the wrist light, the smoke run |
-| `env_cfg.py` | The environment: Rescue's walking setup for the legs, D1Training's arm and camera, the cup, the competition terrain |
+| `sim.py` | Arguments (`--robot`, `--policy`), startup, the loop, the wrist light, the smoke run |
+| `env_cfg.py` | The environment: either robot, Rescue's walking setup for the legs and the Go2-W's wheels, D1Training's arm and camera, the cup, the competition terrain |
+| `../go2w.py`, `../go2w_description/` | The Go2-W: Unitree's model, its conversion to USD, its drives and standing pose |
 | `levels.py`, `runtime.py` | The level catalogue and the window's rows, the cup demo and the posture ramp; loading, the window and the keys |
 | `d1_model.py` | D1Training's arm constants, planner and sampler, verbatim, and the real arm's wire conventions |
 | `d1_arm.py`, `d1_drive.py` | The simulated firmware and its DDS link, and where it meets PhysX |
 | `bridge.py` | VIP-Rescue's arm bridge, started and stopped with the sim |
 | `realsense.py`, `camera_asset.py`, `cup_asset.py` | The camera model, mount, depth noise and ROS publisher, the case, and the cup, from D1Training |
 | `ros_io.py` | The ROS node, the lidar, the IMU |
-| `exported_policy.py`, `deploy_contract.py` | `--policy`: an exported policy's bundle, its checks, its height scan and camera mask; the bundle's own contract reader, verbatim |
+| `exported_policy.py`, `deploy_contract.py` | `--policy`: an exported policy's bundle, its checks, its height scan and camera mask, a wheeled policy's wheels; the bundle's own contract reader, verbatim |
 | `assets/` | The calibration, the mount, the D435 case mesh and the cup model, with their licences |

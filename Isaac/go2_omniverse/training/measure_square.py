@@ -4,7 +4,8 @@
         --policy policies/go2_krail_2026-10-11 --trials 20 --speed 0.5 --out square.json
 
 THE ENVIRONMENT IS THE SIM'S: `rescue_sim.env_cfg.make_env_cfg` with the competition hall exported by
-`competition.build.export_scene`, the robot welded by `arm_weld`, the arm folded at its rest, the scan read off the
+`competition.build.export_scene`, the robot the policy was trained on (the Go2-W for a wheeled bundle, the Go2
+otherwise) welded by `arm_weld`, the arm folded at its rest, the scan read off the
 hall's walkable-surface mesh, and the policy loaded and checked by the sim's own `_load_exported`. What it leaves out
 is everything that needs ROS or DDS: the lidar, the wrist camera's images (and the camera itself), the arm's
 simulated firmware (its drives hold the rest, as the firmware does with no command) and the cup.
@@ -90,10 +91,17 @@ def main():
     scene_usd = GENERATED / f"measure_square_{pid}.usdc"
     lanes = export_scene(scene_usd, Options(gravel="static", k_rail_height=args.k_rail_height))
     origin = np.array(next(lane for lane in lanes if lane.key == "square").origin[:2])
-    level = next(level for level in lv.catalogue(lanes) if level.key == "square")
+    model = bundle.robot
+    level = next(level for level in lv.catalogue(lanes, model) if level.key == "square")
     urdf = SIM_DIR / "d1_arm" / "d1.urdf"
-    weld = build_welded_robot_usd(go2_usd_path=UNITREE_GO2_CFG.spawn.usd_path, d1_urdf_path=str(urdf),
-                                  out_usd_path=str(GENERATED / f"measure_square_{pid}" / "go2_d1.usd"),
+    if model == "go2w":
+        import go2w
+
+        base_usd = go2w.build_go2w_usd()
+    else:
+        base_usd = UNITREE_GO2_CFG.spawn.usd_path
+    weld = build_welded_robot_usd(go2_usd_path=base_usd, d1_urdf_path=str(urdf),
+                                  out_usd_path=str(GENERATED / f"measure_square_{pid}" / f"{model}_d1.usd"),
                                   mount_pos=D1_MOUNT_POS, arm_mass_kg=3.152)
     lower, upper = _urdf_arm_limits(urdf)
     cfg = envs.make_env_cfg(
@@ -102,7 +110,7 @@ def main():
         mount=load_mount(DEFAULT_MOUNT), camera_body_usd=None, spawn=level.spawn,
         spawn_rotation=level.spawn_rotation, arm_q=d1_model.rest_joint_rad(lower, upper),
         finger_travel=d1_model.units_to_travel(d1_model.REST_GRIPPER_UNITS), device=args.device, seed=args.seed,
-        policy=bundle)
+        policy=bundle, model=model)
     cfg.scene.wrist_cam = None
     cfg.scene.cup = None
     cfg.scene.rs_body = None
@@ -110,7 +118,7 @@ def main():
     envs.command_limits = bundle.contract.command_ranges
     lows, highs = (np.array(v) for v in bundle.contract.command_ranges)
     env = ManagerBasedRLEnv(cfg=cfg)
-    policy = _load_exported(bundle, env)
+    policy = _load_exported(bundle, env, model)
     robot = env.scene["robot"]
     scanner = env.scene["height_scanner"]
     contacts = env.scene["contact_forces"]
@@ -134,6 +142,11 @@ def main():
         root[:, :3] += env.scene.env_origins
         robot.write_root_pose_to_sim(root[:, :7])
         robot.write_root_velocity_to_sim(torch.zeros_like(root[:, 7:]))
+        # The joints at the standing pose, as the sim's level loader puts them (`rescue_sim.runtime`): nothing in
+        # this env resets them, and Isaac Lab does not write the configured pose at startup, so until 2026-10-31
+        # every trial began from the USD's zero pose (legs straight, the knees past their limit), and the Go2's
+        # policies got up from that. The Go2-W's straight legs stand its wheels 10 cm into the floor.
+        robot.write_joint_state_to_sim(robot.data.default_joint_pos.clone(), torch.zeros_like(robot.data.joint_vel))
         envs.base_command["0"] = [0.0, 0.0, 0.0]
         with torch.inference_mode():
             for _ in range(int(1.5 / dt)):
@@ -226,7 +239,7 @@ def main():
 
     ok = [r for r in trials if r["success"]]
     summary = {
-        "policy": str(bundle.directory), "speed": args.speed, "k_rail_height": args.k_rail_height,
+        "policy": str(bundle.directory), "robot": model, "speed": args.speed, "k_rail_height": args.k_rail_height,
         "trials": len(trials), "success": len(ok), "fell": sum(r["fell"] for r in trials),
         "stage_counts": {s: sum(s in r["stages"] for r in trials) for s in STAGES},
         "mean_time_s": round(float(np.mean([r["time_s"] for r in ok])), 2) if ok else None,

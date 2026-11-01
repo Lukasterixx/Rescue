@@ -251,13 +251,14 @@ class tilt_from_ground(ManagerTermBase):
         self._sxx, self._syy = (self._x ** 2).sum(), (self._y ** 2).sum()
 
     def __call__(self, env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, sensor_cfg: SceneEntityCfg,
-                 half_length: float = 0.4, half_width: float = 0.25) -> torch.Tensor:
+                 half_length: float = 0.4, half_width: float = 0.25, miss_depth: float = 0.33) -> torch.Tensor:
         asset = env.scene[asset_cfg.name]
         sensor = env.scene.sensors[sensor_cfg.name]
         if self._sel is None:
             self._grid(sensor, half_length, half_width)
         z = sensor.data.ray_hits_w[:, self._sel, 2]
-        z = torch.where(torch.isfinite(z), z, asset.data.root_pos_w[:, 2:3] - 0.33)  # a miss reads as flat ground
+        # A miss reads as flat ground `miss_depth` under the base: the robot's standing height (the Go2's 0.33).
+        z = torch.where(torch.isfinite(z), z, asset.data.root_pos_w[:, 2:3] - miss_depth)
         z = z - z.mean(dim=1, keepdim=True)
         # The grid is yaw-aligned and symmetric, so the plane's two slopes are fitted independently.
         normal = torch.stack([-(z * self._x).sum(dim=1) / self._sxx, -(z * self._y).sum(dim=1) / self._syy,

@@ -183,3 +183,11 @@ class Go2KRailPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         symmetry_cfg=RslRlSymmetryCfg(use_data_augmentation=True, use_mirror_loss=True, mirror_loss_coeff=0.5,
                                       data_augmentation_func=compute_symmetric_states),
     )
+
+
+@configclass
+class Go2WKRailPPORunnerCfg(Go2KRailPPORunnerCfg):
+    """The Go2-W's K-Rail Square policy (`krail_go2w_env_cfg.py`): the Go2's runner, network and mirror training
+    unchanged (the mirror reads the wheels off the action manager), logged apart."""
+
+    experiment_name = "go2w_krail"

@@ -51,6 +51,8 @@ import isaaclab_tasks  # noqa: E402,F401
 from isaaclab.terrains import TerrainImporterCfg  # noqa: E402
 from isaaclab_tasks.utils import parse_env_cfg  # noqa: E402
 
+import krail_bundle  # noqa: E402
+
 COMMANDS = {
     "fwd_0.3": (0.3, 0.0, 0.0), "fwd_0.5": (0.5, 0.0, 0.0), "fwd_0.8": (0.8, 0.0, 0.0), "fwd_1.0": (1.0, 0.0, 0.0),
     "back_0.5": (-0.5, 0.0, 0.0), "left_0.4": (0.0, 0.4, 0.0), "right_0.4": (0.0, -0.4, 0.0),
@@ -64,7 +66,9 @@ SETTLE_S = 3.0
 def main():
     names = args.commands.split(",") if args.commands else list(COMMANDS)
     n = len(names) * args.reps
-    cfg = parse_env_cfg("Isaac-Velocity-Rescue-KRail-Go2-Play-v0", device=args.device, num_envs=n)
+    # The task the bundle's robot trained in, and the envelope the sim clamps its commands to.
+    robot_name, task, (lows, highs) = krail_bundle.read(args.policy)
+    cfg = parse_env_cfg(task, device=args.device, num_envs=n)
     cfg.events.add_base_mass = None
     cfg.events.base_com = None
     cfg.episode_length_s = args.seconds + 1.0
@@ -84,11 +88,12 @@ def main():
         gen.sub_terrains = {k: v for k, v in gen.sub_terrains.items() if k.startswith(keep)}
         gen.difficulty_range = (args.difficulty, args.difficulty)
         gen.num_rows, gen.num_cols, gen.curriculum = 4, 8, False
-    env = gym.make("Isaac-Velocity-Rescue-KRail-Go2-Play-v0", cfg=cfg)
+    env = gym.make(task, cfg=cfg)
     core = env.unwrapped
     policy = torch.jit.load(str(Path(args.policy).expanduser() / "policy.pt"), map_location=core.device).eval()
     term = core.command_manager.get_term("base_velocity")
     target = torch.tensor([COMMANDS[k] for k in names for _ in range(args.reps)], device=core.device)
+    target = torch.clamp(target, torch.tensor(lows, device=core.device), torch.tensor(highs, device=core.device))
     robot = core.scene["robot"]
 
     obs, _ = env.reset()
@@ -127,7 +132,7 @@ def main():
     results = {}
     for i, name in enumerate(names):
         rows = slice(i * args.reps, (i + 1) * args.reps)
-        cmd = np.array(COMMANDS[name])
+        cmd = np.clip(np.array(COMMANDS[name]), lows, highs)
         ok = alive[rows]
         v = mean_v[rows][ok] if ok.any() else mean_v[rows]
         e = err[rows][ok] if ok.any() else err[rows]
@@ -142,7 +147,7 @@ def main():
             "max_rise_m": round(float(rise[rows].max()), 3),
         }
         print(f"[tracking] {name:12s} {json.dumps(results[name])}", flush=True)
-    out = {"policy": args.policy, "terrain": args.terrain,
+    out = {"policy": args.policy, "robot": robot_name, "terrain": args.terrain,
            "difficulty": args.difficulty if args.terrain == "krail" else None, "seconds": args.seconds,
            "results": results}
     if args.out:

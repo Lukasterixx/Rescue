@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# The rescue sim: the Go2 with its D1 arm and wrist RealSense, the competition's lanes and D1Training's cup demo.
+# The rescue sim: the Go2-W (or, with --robot go2, the Go2) with its D1 arm and wrist RealSense, the competition's
+# lanes and D1Training's cup demo.
 #
 #   ./run_sim.sh                               # windowed, starting on the Shifty Gravel lane
-#   ./run_sim.sh --level cup                   # start in the cup demo, the Go2 lying beside a mug
+#   ./run_sim.sh --robot go2                   # the legged Go2 instead of the Go2-W, with its own walking policy
+#   ./run_sim.sh --level cup                   # start in the cup demo, the robot lying beside a mug
 #   ./run_sim.sh --headless --smoke-steps 800  # load every level, lie down and stand up, then exit
 #   ./run_sim.sh --help                        # every option
 #

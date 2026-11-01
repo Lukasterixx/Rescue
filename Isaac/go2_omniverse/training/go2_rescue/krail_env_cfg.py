@@ -102,9 +102,10 @@ KRAIL_TERRAINS_CFG = TerrainGeneratorCfg(
 )
 
 
-def sim_robot_cfg():
-    """The rescue sim's robot (`rescue_sim.env_cfg.robot_cfg`), welded fresh into this process's own folder, with the
-    arm folded at the sim's rest. Must run after the app is up (the weld imports the URDF through Kit)."""
+def sim_robot_cfg(model: str = "go2"):
+    """The rescue sim's robot (`rescue_sim.env_cfg.robot_cfg`), the Go2 or with `model` "go2w" the Go2-W, welded fresh
+    into this process's own folder, with the arm folded at the sim's rest. Must run after the app is up (the weld
+    imports the URDF through Kit)."""
     root = Path(__file__).resolve().parents[2]  # Isaac/go2_omniverse, through the install symlink
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
@@ -116,9 +117,15 @@ def sim_robot_cfg():
     from rescue_sim import d1_model
     from rescue_sim.env_cfg import robot_cfg
 
+    if model == "go2w":
+        import go2w
+
+        base_usd = go2w.build_go2w_usd()
+    else:
+        base_usd = UNITREE_GO2_CFG.spawn.usd_path
     urdf = root / "d1_arm" / "d1.urdf"
-    out = root / "d1_arm" / "generated" / f"krail_{os.getpid()}" / "go2_d1_krail.usd"
-    weld = build_welded_robot_usd(go2_usd_path=UNITREE_GO2_CFG.spawn.usd_path, d1_urdf_path=str(urdf),
+    out = root / "d1_arm" / "generated" / f"krail_{os.getpid()}" / f"{model}_d1_krail.usd"
+    weld = build_welded_robot_usd(go2_usd_path=base_usd, d1_urdf_path=str(urdf),
                                   out_usd_path=str(out), mount_pos=D1_MOUNT_POS, arm_mass_kg=3.152,
                                   dock_visual=False)
     joints = {j.get("name"): j.find("limit") for j in ET.parse(urdf).getroot().findall("joint")}  # as sim.py reads them
@@ -127,8 +134,8 @@ def sim_robot_cfg():
     rest_q = d1_model.rest_joint_rad(lower, upper)
     travel = d1_model.units_to_travel(d1_model.REST_GRIPPER_UNITS)
     cfg = robot_cfg(weld.usd_path, spawn=(0.0, 0.0, 0.42), spawn_rotation=(1.0, 0.0, 0.0, 0.0), arm_q=rest_q,
-                    finger_travel=travel)
-    print(f"[krail] training robot: the sim's, arm at rest {[round(math.degrees(q), 1) for q in rest_q]} deg")
+                    finger_travel=travel, model=model)
+    print(f"[krail] training robot: the sim's {model}, arm at rest {[round(math.degrees(q), 1) for q in rest_q]} deg")
     return cfg
 
 
@@ -271,10 +278,14 @@ class Go2KRailEnvCfg(LocomotionVelocityRoughEnvCfg):
     curriculum: KRailCurriculumCfg = KRailCurriculumCfg()
     terminations: KRailTerminationsCfg = KRailTerminationsCfg()
 
+    def _robot_cfg(self):
+        """The robot trained on: the sim's Go2 (`krail_go2w_env_cfg.py` overrides it with the Go2-W)."""
+        return sim_robot_cfg("go2")
+
     def __post_init__(self):
         super().__post_init__()
         # --- the robot: the sim's --------------------------------------------------------------------------------
-        self.scene.robot = sim_robot_cfg()
+        self.scene.robot = self._robot_cfg()
         self.scene.height_scanner.prim_path = "{ENV_REGEX_NS}/Robot/base"
         self.actions.joint_pos.joint_names = LEG_JOINTS
         self.actions.joint_pos.scale = 0.25

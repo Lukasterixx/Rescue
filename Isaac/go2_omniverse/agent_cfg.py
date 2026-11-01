@@ -23,10 +23,10 @@
 
 # THE rsl_rl CHECKPOINT `--policy agent_cfg` WALKS WITH.
 #
-# Since 2026-10-12 the sim's default walking policy is the exported K-Rail Square policy, since
-# 2026-10-13 policies/go2_krail_2026-10-13 (rescue_sim/sim.py, DEFAULT_POLICY); `--policy DIR` names
+# Since 2026-10-12 the sim's default walking policy is the exported K-Rail Square policy, on the Go2 since
+# 2026-10-13 policies/go2_krail_2026-10-13 (rescue_sim/sim.py, DEFAULT_POLICIES); `--policy DIR` names
 # any other exported one. This file is the policy the sim loaded by default before that, and still loads with
-# `--policy agent_cfg`: see rescue_sim/README.md, "Walking policies".
+# `--robot go2 --policy agent_cfg` (it drives the Go2, not the Go2-W): see rescue_sim/README.md, "Walking policies".
 #
 # A FLAT-GROUND POLICY, installed 2026-09-15: `go2_rescue_flat/2026-09-15_08-09-04_abl_FlatP2D`,
 # model_1999. The maze is flat now (`terrain_cfg.py`, `elevation_chance=0.0`) because no policy

@@ -13,6 +13,10 @@ writes, in the layout of `policies/go2_policies_2026-09-18/` (whose README says 
     OUT/params/export.json      which run and checkpoint, the files' sha256, and how far the TorchScript and ONNX
                                 outputs are from the rebuilt network
 
+A Go2-W run (`go2_rescue/krail_go2w_env_cfg.py`) also has a `wheel_vel` action term; its contract gets that term
+beside the legs' and a `wheels` section (the wheels in action order, their SDK indices and the drive), and its policy
+maps to 16 actions. `rescue_sim/exported_policy.py`, `WheelContract`, says how the sim reads them.
+
 The contract is generated from the run's env.yaml, never typed: the control period, the leg order and default pose,
 the gains, the action scale, the command envelope and every observation term's width, scale, clip and history. The
 sim then checks the legs, gains, rate and width against its own robot before the policy gets them
@@ -41,10 +45,27 @@ ISAAC_LAB_LEG_ORDER = (
 )
 JOINT_IDS_MAP = [3, 0, 9, 6, 4, 1, 10, 7, 5, 2, 11, 8]
 LEG_GROUP = "base_legs"
+# The Go2-W's wheels in action order, and their indices in Unitree's SDK order (the legs' FR, FL, RR, RL, then the
+# wheels FR, FL, RR, RL at 12-15: unitree_rl_lab's `joint_sdk_names` for the Go2-W).
+WHEEL_ORDER = ("FL_foot_joint", "FR_foot_joint", "RL_foot_joint", "RR_foot_joint")
+WHEEL_SDK_IDS = [13, 12, 15, 14]
+WHEEL_GROUP = "wheels"
+WHEEL_TERM = "wheel_vel"
 
 # Widths of the stock observation functions this task uses; the scan's comes from its pattern.
 TERM_WIDTHS = {"base_lin_vel": 3, "base_ang_vel": 3, "projected_gravity": 3, "generated_commands": 3,
                "joint_pos_rel": 12, "joint_vel_rel": 12, "last_action": 12}
+LEG_REGEXES = [".*_hip_joint", ".*_thigh_joint", ".*_calf_joint"]
+
+
+def joint_term_width(term: dict) -> int:
+    """A joint term's width: 12 for the legs by regex (as the Go2's task names them), or one per joint named."""
+    names = list(((term.get("params") or {}).get("asset_cfg") or {}).get("joint_names") or [])
+    if names == LEG_REGEXES:
+        return 12
+    if names and all(re.fullmatch(r"[A-Za-z0-9_]+", n) for n in names):
+        return len(names)
+    raise SystemExit(f"cannot tell how many joints {names} reads")
 
 
 class _EnvYamlLoader(yaml.SafeLoader):
@@ -97,10 +118,33 @@ def resolve(pattern_values: dict, names) -> list[float]:
     return out
 
 
+def wheels_contract(env: dict) -> tuple[dict, dict] | None:
+    """The `wheel_vel` action term and the `wheels` section for a Go2-W run; None for a Go2 run."""
+    action = env["actions"].get(WHEEL_TERM)
+    if action is None:
+        return None
+    names = list(action["joint_names"])
+    if tuple(names) != WHEEL_ORDER or not action.get("preserve_order"):
+        raise SystemExit(f"the wheel action drives {names} (preserve_order {action.get('preserve_order')}); the sim "
+                         f"expects {list(WHEEL_ORDER)} in that order")
+    if not action.get("use_default_offset"):
+        raise SystemExit("the wheel action does not start from the default (rest) velocity")
+    drive = env["scene"]["robot"]["actuators"][WHEEL_GROUP]
+    term = {"clip": None, "joint_names": names, "scale": [float(action["scale"])] * 4, "offset": 0.0,
+            "joint_ids": None}
+    # Copies, not the same list twice: yaml would write the second as an alias of the first.
+    section = {"joint_names": list(names), "joint_ids_map": list(WHEEL_SDK_IDS), "control": "velocity",
+               "stiffness": [float(drive["stiffness"])] * 4, "damping": [float(drive["damping"])] * 4,
+               "effort_limit": [float(drive["effort_limit_sim"])] * 4,
+               "velocity_limit": [float(drive["velocity_limit_sim"])] * 4}
+    return term, section
+
+
 def deploy_contract(env: dict) -> dict:
     robot = env["scene"]["robot"]
     legs = robot["actuators"][LEG_GROUP]
     action = env["actions"]["joint_pos"]
+    wheels = wheels_contract(env)
     if not action.get("use_default_offset"):
         raise SystemExit("the action term does not add the default pose; the sim assumes it does")
     if action.get("clip") is not None:
@@ -114,7 +158,14 @@ def deploy_contract(env: dict) -> dict:
         if not isinstance(term, dict) or "func" not in term:
             continue
         func = term["func"].rsplit(":", 1)[-1]
-        width = nx * ny if func == "height_scan" else TERM_WIDTHS[func]
+        if func == "height_scan":
+            width = nx * ny
+        elif func in ("joint_pos_rel", "joint_vel_rel"):
+            width = joint_term_width(term)
+        elif func == "last_action":
+            width = 12 + (4 if wheels else 0)
+        else:
+            width = TERM_WIDTHS[func]
         if term.get("scale") is not None:
             raise SystemExit(f"{name} is scaled in training; add its scale to the contract before exporting it")
         history = int(term.get("history_length") or 1)
@@ -122,7 +173,7 @@ def deploy_contract(env: dict) -> dict:
         observations[name] = {"params": params, "clip": list(term["clip"]) if term.get("clip") else None,
                               "scale": [1.0] * width, "history_length": history}
         order.append(name)
-    return {
+    contract = {
         "joint_ids_map": JOINT_IDS_MAP,
         "step_dt": float(env["sim"]["dt"]) * int(env["decimation"]),
         "stiffness": [float(legs["stiffness"])] * 12,
@@ -136,6 +187,10 @@ def deploy_contract(env: dict) -> dict:
         "observations": observations,
         "observation_order": order,
     }
+    if wheels is not None:
+        contract["actions"][WHEEL_TERM] = wheels[0]
+        contract["wheels"] = wheels[1]
+    return contract
 
 
 def sha256(path: Path) -> str:
@@ -159,9 +214,10 @@ def main():
     obs_dim = sum(len(t["scale"]) * t["history_length"] for t in contract["observations"].values())
     state = torch.load(ckpt, map_location="cpu", weights_only=False)["actor_state_dict"]
     mlp = actor_mlp(state, agent["actor"]["activation"])
-    if mlp[0].in_features != obs_dim or mlp[-1].out_features != 12:
+    num_actions = 12 + (4 if "wheels" in contract else 0)
+    if mlp[0].in_features != obs_dim or mlp[-1].out_features != num_actions:
         raise SystemExit(f"the actor maps {mlp[0].in_features} -> {mlp[-1].out_features}; the contract says "
-                         f"{obs_dim} -> 12")
+                         f"{obs_dim} -> {num_actions}")
     clip = float(agent["clip_actions"]) if agent.get("clip_actions") is not None else float("inf")
     policy = KRailPolicy(mlp, clip).eval()
 

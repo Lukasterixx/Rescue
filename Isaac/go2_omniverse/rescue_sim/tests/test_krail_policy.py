@@ -71,10 +71,11 @@ class KRailBundleTest(unittest.TestCase):
 
 
 class DefaultIsTheFourFootedOneTest(unittest.TestCase):
-    def test_it_is_the_sims_default(self):
+    def test_it_is_the_go2s_default(self):
+        """`--robot go2` walks with it; the Go2-W has its own (`test_go2w_krail_policy.py`)."""
         from rescue_sim import sim
 
-        self.assertEqual(xp.resolve(sim.DEFAULT_POLICY, sim.SIM_DIR), KRailBundleTest.BUNDLE.resolve())
+        self.assertEqual(xp.resolve(sim.DEFAULT_POLICIES["go2"], sim.SIM_DIR), KRailBundleTest.BUNDLE.resolve())
 
     def test_the_contract_is_the_one_it_was_fine_tuned_from(self):
         """So `--policy policies/go2_krail_2026-10-12` and the default are interchangeable in the sim."""

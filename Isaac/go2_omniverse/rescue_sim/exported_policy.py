@@ -22,12 +22,20 @@ ours: the camera turns with the whole base (roll and pitch too, as a bolted-on c
 along the optical axis (what a D435 reports). On flat ground at a standing height it leaves 97 of the 187 cells
 visible, as the README says, whichever range is used (`tests/test_exported_policy.py`).
 
+A WHEELED POLICY (the Go2-W's, `../go2w.py`) drives four wheels too. Its deploy.yaml has a second action term,
+`wheel_vel`, a velocity target per wheel after the legs' twelve, and a `wheels` section with the wheels' joints, SDK
+indices and drive; its `joint_vel` term reads the wheels' speeds after the legs' (16 wide) and its last action is 16
+wide. `deploy_contract.py` refuses a second action term ("the policy nodes drive joint positions only"), which is
+right for a node that drives legs only, so `Bundle.load` takes the wheel term and the section off (`WheelContract`)
+before the reader sees the rest, and checks them itself.
+
 No Isaac Lab imports: the tests run this with the conda python outside Kit.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+import os
 from pathlib import Path
 
 import torch
@@ -42,6 +50,10 @@ ISAAC_LAB_LEG_ORDER = (
     "FL_thigh_joint", "FR_thigh_joint", "RL_thigh_joint", "RR_thigh_joint",
     "FL_calf_joint", "FR_calf_joint", "RL_calf_joint", "RR_calf_joint",
 )
+
+# The Go2-W's wheels, in the order a wheeled policy's actions and wheel speeds are in (`go2w.WHEEL_JOINTS`).
+WHEEL_ORDER = ("FL_foot_joint", "FR_foot_joint", "RL_foot_joint", "RR_foot_joint")
+WHEEL_ACTION_TERM = "wheel_vel"
 
 # The terms the sim can build (`env_cfg.exported_observations`). deploy_contract knows two more, `gait_phase` and
 # `posture_command`, which nothing here produces.
@@ -136,6 +148,71 @@ _EnvYamlLoader.add_constructor("tag:yaml.org,2002:python/tuple",
 _EnvYamlLoader.add_multi_constructor("tag:yaml.org,2002:python/", lambda loader, suffix, node: None)
 
 
+@dataclass(frozen=True)
+class WheelContract:
+    """A wheeled policy's wheels, from its deploy.yaml: the `wheel_vel` action term (a velocity target of
+    `action_scale` rad/s per unit of action, from rest, after the legs' actions) and the `wheels` section (the joints
+    in action order, their SDK indices, and the velocity drive's gains)."""
+
+    joint_names: tuple
+    action_scale: float
+    stiffness: float
+    damping: float
+    sdk_ids: tuple | None = None
+
+    @classmethod
+    def take(cls, data: dict, source: str) -> "WheelContract | None":
+        """Remove the wheels' action term and section from a deploy.yaml's `data` and return them; None, with `data`
+        untouched, for a legged policy. Raises ExportedPolicyError for a half-written or unusual wheel contract."""
+        actions = data.get("actions") or {}
+        if WHEEL_ACTION_TERM not in actions and "wheels" not in data:
+            return None
+        term, section = actions.pop(WHEEL_ACTION_TERM, None), data.pop("wheels", None)
+        if term is None or section is None:
+            raise ExportedPolicyError(f"{source}: a wheeled contract needs both actions.{WHEEL_ACTION_TERM} and "
+                                      f"wheels; it has only {'the wheels section' if term is None else 'the action'}")
+        names = tuple(section.get("joint_names") or ())
+        problems = []
+        if list(term.get("joint_names") or ()) != list(names):
+            problems.append(f"actions.{WHEEL_ACTION_TERM} drives {term.get('joint_names')}, the wheels section "
+                            f"names {list(names)}")
+        if names != WHEEL_ORDER:
+            problems.append(f"the wheels are {list(names)}, not the Go2-W's {list(WHEEL_ORDER)}")
+        if section.get("control") != "velocity":
+            problems.append(f"the wheels are driven by {section.get('control')!r}; the sim drives them by velocity")
+        if term.get("clip") is not None:
+            problems.append(f"actions.{WHEEL_ACTION_TERM} clips its targets; the sim does not")
+        if float(term.get("offset") or 0.0) != 0.0:
+            problems.append(f"actions.{WHEEL_ACTION_TERM} has an offset; the sim's wheels start from rest")
+        values = {}
+        for key, where in (("scale", term), ("stiffness", section), ("damping", section)):
+            v = where.get(key)
+            v = [float(x) for x in v] if isinstance(v, (list, tuple)) else ([] if v is None else [float(v)])
+            if len(set(v)) != 1:
+                problems.append(f"the wheels' {key} is {v}; the sim gives every wheel one value")
+            values[key] = v[0] if v else float("nan")
+        if problems:
+            raise ExportedPolicyError(f"{source} cannot drive the Go2-W's wheels here:\n  " + "\n  ".join(problems))
+        sdk = section.get("joint_ids_map")
+        return cls(joint_names=names, action_scale=values["scale"], stiffness=values["stiffness"],
+                   damping=values["damping"], sdk_ids=tuple(int(i) for i in sdk) if sdk is not None else None)
+
+
+def _load_contract(directory: Path) -> tuple[DeployContract, WheelContract | None]:
+    """The deploy contract, read by `deploy_contract.py` as it reads any, after the wheels (if any) are taken off."""
+    for path in DeployContract.candidate_paths(str(directory)):
+        if os.path.isfile(path):
+            try:
+                data = yaml.safe_load(Path(path).read_text())
+            except (OSError, yaml.YAMLError) as exc:
+                raise DeployContractError(f"{path}: could not be read ({exc})") from exc
+            if not isinstance(data, dict):
+                raise DeployContractError(f"{path}: expected a YAML mapping, got {type(data).__name__}")
+            wheels = WheelContract.take(data, path)
+            return DeployContract(data, source=path), wheels
+    return DeployContract.load(str(directory)), None     # raises, listing where it looked
+
+
 @dataclass
 class Bundle:
     """An exported policy on disk, checked against what the sim can build. `load` raises ExportedPolicyError with
@@ -146,10 +223,20 @@ class Bundle:
     scanner: ScannerGeometry | None = None       # None when the policy has no height scan
     scan_offset: float = 0.5
     mask: CameraMask | None = None
+    wheels: WheelContract | None = None          # a wheeled (Go2-W) policy's wheels
 
     @property
     def weights(self) -> Path:
         return self.directory / "policy.pt"
+
+    @property
+    def robot(self) -> str:
+        """The robot the policy drives: "go2w" with wheels, "go2" without."""
+        return "go2w" if self.wheels is not None else "go2"
+
+    @property
+    def num_actions(self) -> int:
+        return len(ISAAC_LAB_LEG_ORDER) + (len(self.wheels.joint_names) if self.wheels is not None else 0)
 
     @classmethod
     def load(cls, directory) -> "Bundle":
@@ -157,11 +244,11 @@ class Bundle:
         if not (directory / "policy.pt").is_file():
             raise ExportedPolicyError(f"{directory}: no policy.pt (the TorchScript export) here")
         try:
-            contract = DeployContract.load(str(directory))
+            contract, wheels = _load_contract(directory)
         except DeployContractError as exc:
             raise ExportedPolicyError(str(exc)) from exc
-        problems = contract_problems(contract)
-        bundle = cls(directory=directory, contract=contract)
+        problems = contract_problems(contract, wheels)
+        bundle = cls(directory=directory, contract=contract, wheels=wheels)
         if contract.uses_height_scan:
             try:
                 bundle._read_scan(directory / "params" / "env.yaml")
@@ -213,12 +300,22 @@ class Bundle:
         if self.scanner is not None:
             line += (f"; height scan centred {self.scanner.offset[0]:g} m ahead"
                      + (f", camera mask (unseen cells {c.height_scan_unobserved:g})" if self.mask else ""))
+        if self.wheels is not None:
+            line += (f"; wheels {list(self.wheels.joint_names)} by velocity, {self.wheels.action_scale:g} rad/s per "
+                     f"unit, kd {self.wheels.damping:g}")
         return line
 
 
-def contract_problems(contract: DeployContract) -> list[str]:
+def contract_problems(contract: DeployContract, wheels: WheelContract | None = None) -> list[str]:
     """Why the sim cannot build this contract's observation or apply its actions; empty when it can."""
     problems = []
+    # The joint terms' widths: the legs, and a wheeled policy's wheels after them in the speeds and the actions.
+    joints = len(ISAAC_LAB_LEG_ORDER) + (len(wheels.joint_names) if wheels is not None else 0)
+    for term, want in (("joint_pos_rel", len(ISAAC_LAB_LEG_ORDER)), ("joint_vel_rel", joints), ("last_action", joints)):
+        width = contract.obs_widths.get(term)
+        if width is not None and width != want * contract.obs_history[term]:
+            problems.append(f"observation {term} is {width} wide; the sim builds {want}"
+                            + (" (the legs, then the wheels)" if want != len(ISAAC_LAB_LEG_ORDER) else " (the legs)"))
     unknown = [t for t in contract.obs_terms if t not in SIM_TERMS]
     if unknown:
         problems.append(f"observation terms {unknown} are not built by the sim (it builds {', '.join(SIM_TERMS)})")

@@ -1,5 +1,5 @@
-"""The rescue sim's environment: the walking Go2 with the D1 welded on, in the competition hall, a cup and a wrist
-RealSense.
+"""The rescue sim's environment: the walking Go2-W (or, `--robot go2`, the Go2) with the D1 welded on, in the
+competition hall, a cup and a wrist RealSense.
 
 Two halves, kept apart on purpose:
 
@@ -18,6 +18,11 @@ Two halves, kept apart on purpose:
 
 The policy never acts on the arm: `D1ArmAction` takes no actions, it only feeds the drives from the firmware, so the
 policy's action vector stays the 12 it was trained with.
+
+THE ROBOT is one of `ROBOTS`. The Go2-W (`../go2w.py`) has the Go2's trunk and twelve leg joints, by the same names
+and in the same order, and a velocity-driven wheel where each foot was; its policy also drives the four wheels
+(`wheel_vel`, after the legs in the action) and reads their speeds after the legs' in `joint_vel_rel`. It walks only
+with an exported policy trained on it (`exported_policy.Bundle.wheels`).
 """
 from __future__ import annotations
 
@@ -45,6 +50,7 @@ from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 from isaaclab_assets.robots.unitree import UNITREE_GO2_CFG
 
 from go2_actuators import apply_go2_actuator
+import go2w
 
 from . import d1_model, exported_policy
 from .realsense import FAR_CLIP_M, NEAR_CLIP_M
@@ -57,6 +63,9 @@ STANDING_LEG_POSE = {
     ".*L_hip_joint": 0.1, ".*R_hip_joint": -0.1,
     "F[L,R]_thigh_joint": 0.8, "R[L,R]_thigh_joint": 1.0, ".*_calf_joint": -1.5,
 }
+# The robots the sim can build: the Go2-W, the default, and the Go2 it replaced (`--robot go2`).
+ROBOTS = ("go2w", "go2")
+WHEEL_JOINTS = list(go2w.WHEEL_JOINTS)
 WELD_PATH = "{ENV_REGEX_NS}/Robot/D1"
 LINK6_PATH = WELD_PATH + "/Link6"
 
@@ -208,13 +217,17 @@ def exported_observations(bundle) -> ObservationsCfg:
     are the ones training used; only the command and the scan are the sim's own, as they are for its own policy."""
     contract = bundle.contract
     legs = lambda: {"asset_cfg": SceneEntityCfg("robot", joint_names=LEG_JOINTS)}
+    # A wheeled policy reads the wheels' speeds after the legs' (`exported_policy.WheelContract`), named in order.
+    legs_and_wheels = lambda: {"asset_cfg": SceneEntityCfg(
+        "robot", joint_names=list(exported_policy.ISAAC_LAB_LEG_ORDER) + list(bundle.wheels.joint_names),
+        preserve_order=True)}
     terms = {
         "base_lin_vel": (mdp.base_lin_vel, dict),
         "base_ang_vel": (mdp.base_ang_vel, dict),
         "projected_gravity": (mdp.projected_gravity, dict),
         "velocity_commands": (constant_commands, dict),
         "joint_pos_rel": (mdp.joint_pos_rel, legs),
-        "joint_vel_rel": (mdp.joint_vel_rel, legs),
+        "joint_vel_rel": (mdp.joint_vel_rel, legs_and_wheels if bundle.wheels is not None else legs),
         "last_action": (mdp.last_action, dict),
         "height_scan": (height_scan_exported, lambda: {
             "sensor_cfg": SceneEntityCfg("height_scanner"), "offset": bundle.scan_offset, "mask": bundle.mask,
@@ -246,6 +259,13 @@ def apply_exported_policy(cfg: "RescueEnvCfg", bundle) -> None:
     if contract.action_clip is not None:
         cfg.actions.joint_pos.clip = {name: tuple(float(v) for v in pair)
                                       for name, pair in zip(exported_policy.ISAAC_LAB_LEG_ORDER, contract.action_clip)}
+    wheels = bundle.wheels
+    if (wheels is not None) != (cfg.actions.wheel_vel is not None):
+        raise ValueError(f"{bundle.directory.name} is a {'wheeled' if wheels else 'legged'} policy and this robot "
+                         f"{'has no' if wheels else 'has'} wheels")
+    if wheels is not None:
+        cfg.actions.wheel_vel.joint_names = list(wheels.joint_names)
+        cfg.actions.wheel_vel.scale = wheels.action_scale
     if bundle.scanner is not None:
         scanner = cfg.scene.height_scanner
         scanner.offset = RayCasterCfg.OffsetCfg(pos=bundle.scanner.offset)
@@ -256,9 +276,20 @@ def apply_exported_policy(cfg: "RescueEnvCfg", bundle) -> None:
 
 @configclass
 class ActionsCfg:
-    joint_pos = mdp.JointPositionActionCfg(asset_name="robot", joint_names=LEG_JOINTS, scale=0.25,
-                                           use_default_offset=True)
-    d1_arm = D1ArmActionCfg(asset_name="robot")
+    # Every term annotated: configclass puts annotated fields before bare ones, and the action manager (and so the
+    # policy's action and its `last_action`) follows that order. The legs first, then the wheels, as trained.
+    joint_pos: mdp.JointPositionActionCfg = mdp.JointPositionActionCfg(
+        asset_name="robot", joint_names=LEG_JOINTS, scale=0.25, use_default_offset=True)
+    d1_arm: D1ArmActionCfg = D1ArmActionCfg(asset_name="robot")
+    # The Go2-W's wheels (`wheel_action_cfg`), after the legs; None on the Go2.
+    wheel_vel: mdp.JointVelocityActionCfg | None = None
+
+
+def wheel_action_cfg() -> mdp.JointVelocityActionCfg:
+    """The Go2-W's wheels, as its policies trained: a velocity target of `go2w.WHEEL_ACTION_SCALE` rad/s per unit of
+    action, from rest, in `WHEEL_JOINTS`' order."""
+    return mdp.JointVelocityActionCfg(asset_name="robot", joint_names=list(WHEEL_JOINTS),
+                                      scale=go2w.WHEEL_ACTION_SCALE, use_default_offset=True, preserve_order=True)
 
 
 @configclass
@@ -318,10 +349,17 @@ class RescueEnvCfg(ManagerBasedRLEnvCfg):
         self.viewer.resolution = (1920, 1080)
 
 
-def robot_cfg(robot_usd: str, spawn, spawn_rotation, arm_q, finger_travel) -> ArticulationCfg:
-    """The welded Go2+D1: Rescue's legs, D1Training's arm."""
-    cfg = UNITREE_GO2_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
-    joint_pos = dict(STANDING_LEG_POSE)
+def robot_cfg(robot_usd: str, spawn, spawn_rotation, arm_q, finger_travel, model: str = "go2") -> ArticulationCfg:
+    """The welded Go2+D1, or with `model` "go2w" the Go2-W+D1 (`go2w.articulation_cfg`): Rescue's legs, D1Training's
+    arm. `robot_usd` is the welded robot (`arm_weld.build_welded_robot_usd`) of that model."""
+    if model == "go2w":
+        cfg = go2w.articulation_cfg(robot_usd).replace(prim_path="{ENV_REGEX_NS}/Robot")
+        joint_pos = {**go2w.STANDING_LEG_POSE, **{name: 0.0 for name in WHEEL_JOINTS}}
+    elif model == "go2":
+        cfg = UNITREE_GO2_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+        joint_pos = dict(STANDING_LEG_POSE)
+    else:
+        raise ValueError(f"no robot {model!r}; the sim builds {ROBOTS}")
     joint_pos.update({name: float(q) for name, q in zip(d1_model.ARM_JOINTS, arm_q)})
     joint_pos.update({"Joint7_1": float(finger_travel), "Joint7_2": -float(finger_travel)})
     # Force drives: gains in N*m/rad (legs already are; the URDF import authors the arm as acceleration drives,
@@ -351,8 +389,11 @@ def robot_cfg(robot_usd: str, spawn, spawn_rotation, arm_q, finger_travel) -> Ar
 
 def make_env_cfg(*, terrain_usd: str, scan_mesh: str, robot_usd: str, cup_usd: str, cup_pose, camera, mount,
                  camera_body_usd: str | None, spawn, spawn_rotation, arm_q, finger_travel, device: str = "cuda:0",
-                 seed: int = 42, camera_period_s: float = 0.0, policy=None) -> RescueEnvCfg:
-    """`policy`: an `exported_policy.Bundle` to build the observation for, or None for the sim's own policy."""
+                 seed: int = 42, camera_period_s: float = 0.0, policy=None, model: str = "go2") -> RescueEnvCfg:
+    """`policy`: an `exported_policy.Bundle` to build the observation for, or None for the sim's own policy (the
+    Go2's only). `model`: one of `ROBOTS`, the robot `robot_usd` was welded from."""
+    if model == "go2w" and policy is None:
+        raise ValueError("the Go2-W walks only with an exported policy trained on it; agent_cfg.py's is the Go2's")
     cfg = RescueEnvCfg()
     cfg.seed = seed
     cfg.sim.device = device
@@ -364,7 +405,9 @@ def make_env_cfg(*, terrain_usd: str, scan_mesh: str, robot_usd: str, cup_usd: s
             static_friction=1.0, dynamic_friction=1.0),
     )
     scene.height_scanner.mesh_prim_paths = [scan_mesh]
-    scene.robot = robot_cfg(robot_usd, spawn, spawn_rotation, arm_q, finger_travel)
+    scene.robot = robot_cfg(robot_usd, spawn, spawn_rotation, arm_q, finger_travel, model=model)
+    if model == "go2w":
+        cfg.actions.wheel_vel = wheel_action_cfg()
     scene.cup = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/Cup",
         spawn=sim_utils.UsdFileCfg(usd_path=cup_usd),

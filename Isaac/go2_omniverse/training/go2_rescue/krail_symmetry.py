@@ -13,6 +13,12 @@ centre-of-mass randomisation already is.
 The layout is `krail_env_cfg.KRailObservationsCfg`'s, the same in both groups: base_lin_vel 3, base_ang_vel 3,
 projected_gravity 3, velocity_commands 3, then the 12 legs' positions, velocities and last actions in Isaac Lab's
 order (FL, FR, RL, RR hips, then thighs, then calves), then the height scan, an x-fastest grid ("xy" ordering).
+
+THE GO2-W (`krail_go2w_env_cfg.py`) has four wheels after the legs in the velocities and the actions (FL, FR, RL, RR),
+so those two blocks are 16 wide; how many there are is read off the action manager. A wheel mirrors to the wheel
+opposite with the same sign: all four turn about their +y axle, and a spin about the axis the mirror flips is
+unchanged by it (an angular velocity is a pseudovector), so a left wheel rolling forward mirrors to a right wheel
+rolling forward.
 """
 from __future__ import annotations
 
@@ -22,12 +28,26 @@ import torch
 # hips are +-0.1, so a position relative to it mirrors by the same rule.
 _MIRROR_INDEX = [1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10]
 _MIRROR_SIGN = [-1.0] * 4 + [1.0] * 8
+_WHEEL_MIRROR_INDEX = [1, 0, 3, 2]
 # (lin vel, ang vel, gravity, command): y, roll, yaw, gravity's y, the lateral and yaw commands change sign.
 _BASE_SIGN = [1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, -1.0]
 
 
 def _mirror_legs(x: torch.Tensor) -> torch.Tensor:
     return x[..., _MIRROR_INDEX] * torch.tensor(_MIRROR_SIGN, device=x.device, dtype=x.dtype)
+
+
+def _mirror_joints(x: torch.Tensor, wheels: int) -> torch.Tensor:
+    """The legs' 12 columns, then `wheels` wheel columns (0 or 4)."""
+    legs = _mirror_legs(x[..., :12])
+    return torch.cat([legs, x[..., 12:][..., _WHEEL_MIRROR_INDEX]], dim=-1) if wheels else legs
+
+
+def _wheels(env) -> int:
+    wheels = env.unwrapped.action_manager.total_action_dim - 12
+    if wheels not in (0, 4):
+        raise ValueError(f"the mirror knows the Go2's 12 actions and the Go2-W's 16, not {12 + wheels}")
+    return wheels
 
 
 def _scan_shape(env) -> tuple[int, int]:
@@ -41,14 +61,18 @@ def _scan_shape(env) -> tuple[int, int]:
 
 def mirror_observation(env, obs: torch.Tensor) -> torch.Tensor:
     ny, nx = _scan_shape(env)
-    if obs.shape[-1] != 48 + ny * nx:
-        raise ValueError(f"observation is {obs.shape[-1]} wide, expected 48 + {ny} x {nx}")
+    w = _wheels(env)
+    joints = 48 + 2 * w
+    if obs.shape[-1] != joints + ny * nx:
+        raise ValueError(f"observation is {obs.shape[-1]} wide, expected {joints} + {ny} x {nx}")
     out = obs.clone()
     out[..., :12] = obs[..., :12] * torch.tensor(_BASE_SIGN, device=obs.device, dtype=obs.dtype)
-    for start in (12, 24, 36):
-        out[..., start:start + 12] = _mirror_legs(obs[..., start:start + 12])
+    out[..., 12:24] = _mirror_legs(obs[..., 12:24])                      # positions: the legs only
+    for start in (24, 36 + w):                                            # velocities, then last actions
+        out[..., start:start + 12 + w] = _mirror_joints(obs[..., start:start + 12 + w], w)
     # Rows are y from -size/2 to +size/2, symmetric about the base, so the mirror flips the row order.
-    out[..., 48:] = obs[..., 48:].reshape(*obs.shape[:-1], ny, nx).flip(dims=[-2]).reshape(*obs.shape[:-1], ny * nx)
+    scan = obs[..., joints:].reshape(*obs.shape[:-1], ny, nx).flip(dims=[-2])
+    out[..., joints:] = scan.reshape(*obs.shape[:-1], ny * nx)
     return out
 
 
@@ -64,5 +88,5 @@ def compute_symmetric_states(env, obs=None, actions=None):
             obs_aug[group][batch:] = mirror_observation(env, obs[group])
     actions_aug = None
     if actions is not None:
-        actions_aug = torch.cat([actions, _mirror_legs(actions)], dim=0)
+        actions_aug = torch.cat([actions, _mirror_joints(actions, _wheels(env))], dim=0)
     return obs_aug, actions_aug

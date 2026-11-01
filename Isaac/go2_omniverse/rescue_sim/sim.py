@@ -1,6 +1,7 @@
-"""The rescue sim: the Go2 with its D1 and wrist RealSense, the competition's lanes and D1Training's cup demo.
+"""The rescue sim: the Go2-W with its D1 and wrist RealSense, the competition's lanes and D1Training's cup demo.
 
     ./run_sim.sh                              # the Shifty Gravel lane, windowed
+    ./run_sim.sh --robot go2                  # the legged Go2 instead of the Go2-W
     ./run_sim.sh --level cup                  # start in the cup demo
     ./run_sim.sh --headless --smoke-steps 800 # load every level, lie down and stand up; then exit
 
@@ -23,11 +24,17 @@ HERE = Path(__file__).resolve().parent            # rescue_sim/
 SIM_DIR = HERE.parent                             # Isaac/go2_omniverse: the policy logs, the D1 URDF, d1_sdk
 GENERATED = HERE / "generated"
 DRIVE_KEYS = ("W", "A", "S", "D", "Q", "E")
-# The walking policy the sim loads unless `--policy` names another: the K-Rail Square policy, trained on this sim's
-# robot and fine-tuned to stand and stop on four feet (`policies/go2_krail_2026-10-13/README.md`; the 2026-10-12 one
-# before it handstood when stopped). `--policy agent_cfg` walks with agent_cfg.py's rsl_rl checkpoint, the default
-# until 2026-10-12.
-DEFAULT_POLICY = "policies/go2_krail_2026-10-13"
+# The robot the sim builds unless `--robot` names the other (`env_cfg.ROBOTS`): the Go2-W since 2026-11, the Go2
+# before it.
+DEFAULT_ROBOT = "go2w"
+ROBOTS = ("go2w", "go2")        # env_cfg.ROBOTS, which cannot be imported before the app is up
+ROBOT_NAMES = {"go2w": "Go2-W", "go2": "Go2"}
+# The walking policy each robot loads unless `--policy` names another. The Go2-W's is its K-Rail Square policy
+# (`policies/go2w_krail_2026-11-01/README.md`). The Go2's is its K-Rail Square policy, trained on this sim's robot and
+# fine-tuned to stand and stop on four feet (`policies/go2_krail_2026-10-13/README.md`; the 2026-10-12 one before it
+# handstood when stopped); `--robot go2 --policy agent_cfg` walks it with agent_cfg.py's rsl_rl checkpoint, the
+# default until 2026-10-12.
+DEFAULT_POLICIES = {"go2w": "policies/go2w_krail_2026-11-01", "go2": "policies/go2_krail_2026-10-13"}
 AGENT_CFG_POLICY = "agent_cfg"
 
 
@@ -49,11 +56,16 @@ def parse_args(argv=None):
                         help="never run faster than real time (default on): the arm's 10 Hz bridge runs on "
                              "the wall clock")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--policy", default=DEFAULT_POLICY, metavar="DIR|agent_cfg",
+    parser.add_argument("--robot", default=DEFAULT_ROBOT, choices=ROBOTS,
+                        help="the robot: the wheeled Go2-W (default) or the legged Go2 it replaced; either carries the "
+                             "D1, and each has its own walking policy")
+    parser.add_argument("--policy", default=None, metavar="DIR|agent_cfg",
                         help="the walking policy: an exported one, a directory holding policy.pt and params/deploy.yaml, "
-                             "absolute or relative to the sim directory (default %(default)s, the K-Rail Square "
-                             "policy; others: policies/go2_policies_2026-09-18/flat or .../rough), or 'agent_cfg' "
-                             "for agent_cfg.py's rsl_rl checkpoint, the default before 2026-10-12")
+                             "absolute or relative to the sim directory, trained on the robot --robot names (default: "
+                             + ", ".join(f"{p} for the {r}" for r, p in DEFAULT_POLICIES.items())
+                             + "; others for the Go2: policies/go2_krail_2026-10-12, "
+                             "policies/go2_policies_2026-09-18/flat or .../rough), or 'agent_cfg' for agent_cfg.py's "
+                             "rsl_rl checkpoint, the Go2's default before 2026-10-12")
     # The competition's geometry.
     from competition.build import add_geometry_args
 
@@ -86,6 +98,10 @@ def parse_args(argv=None):
     cli_args.add_rsl_rl_args(parser)
     AppLauncher.add_app_launcher_args(parser)
     args = parser.parse_args(argv)
+    if args.policy is None:
+        args.policy = DEFAULT_POLICIES[args.robot]
+    if args.policy == AGENT_CFG_POLICY and args.robot != "go2":
+        parser.error("--policy agent_cfg is a Go2 policy; add --robot go2")
     if args.smoke_steps and args.smoke_steps < 300:
         parser.error("--smoke-steps must be at least 300 (or 0 for interactive use): every level, then standing up")
     # Isaac Lab's Camera needs the RTX sensor pipeline.
@@ -154,17 +170,23 @@ def _load_policy(env, agent_cfg, device):
     return runner, runner.get_inference_policy(device=device)
 
 
-def _load_exported(bundle, core):
+def _load_exported(bundle, core, model: str = "go2"):
     """An exported walking policy (`--policy`), once the sim is checked to run the legs as it trained: in the Isaac
-    Lab joint order, from its default pose, with its gains, at its control rate, into an observation of its width.
-    Every one of those is wrong silently, so a mismatch stops the sim instead."""
+    Lab joint order, from its default pose, with its gains, at its control rate, into an observation of its width,
+    and a wheeled policy's wheels in its order with its drive and action scale. Every one of those is wrong silently,
+    so a mismatch stops the sim instead."""
     from isaaclab.managers import SceneEntityCfg
 
+    import go2w
     from go2_actuators import GO2_LEG_ACTUATOR_GROUP
     from rescue_sim import env_cfg as envs, exported_policy as xp
 
     contract = bundle.contract
     robot = core.scene["robot"]
+    if bundle.robot != model:
+        raise SystemExit(f"[policy] {bundle.directory} was trained on the {ROBOT_NAMES[bundle.robot]} and this sim is "
+                         f"running the {ROBOT_NAMES[model]}: add --robot {bundle.robot}, or give --policy one trained "
+                         f"on the {ROBOT_NAMES[model]}")
     legs = SceneEntityCfg("robot", joint_names=envs.LEG_JOINTS)      # as the leg observation terms resolve them
     legs.resolve(core.scene)
     ids = list(range(robot.num_joints)) if isinstance(legs.joint_ids, slice) else list(legs.joint_ids)
@@ -186,6 +208,28 @@ def _load_exported(bundle, core):
                 problems.append(f"leg {what} is {sorted(set(have.flatten().tolist()))}, trained {want}")
     except xp.DeployContractError as exc:
         problems.append(str(exc))
+    if bundle.wheels is not None:
+        wheels = bundle.wheels
+        term = core.action_manager.get_term("wheel_vel")
+        if list(term._joint_names) != list(wheels.joint_names):
+            problems.append(f"the wheel action drives {list(term._joint_names)}, trained {list(wheels.joint_names)}")
+        scale = term._scale if isinstance(term._scale, float) else sorted(set(term._scale.flatten().tolist()))
+        if scale != wheels.action_scale:
+            problems.append(f"the wheel action's scale is {scale}, trained {wheels.action_scale:g}")
+        drive = robot.actuators[go2w.WHEEL_ACTUATOR_GROUP]
+        for what, have, want in (("stiffness", drive.stiffness, wheels.stiffness),
+                                 ("damping", drive.damping, wheels.damping)):
+            if not _all_near(have, want):
+                problems.append(f"wheel {what} is {sorted(set(have.flatten().tolist()))}, trained {want:g}")
+    acting = core.action_manager.total_action_dim
+    if acting != bundle.num_actions:
+        problems.append(f"the robot takes {acting} actions, the policy gives {bundle.num_actions}")
+    # Where each slice of the action goes (and so what `last_action` reads back): the legs, then any wheels.
+    layout = [(name, core.action_manager.get_term(name).action_dim) for name in core.action_manager.active_terms]
+    layout = [(name, width) for name, width in layout if width]
+    trained = [("joint_pos", 12)] + ([("wheel_vel", len(bundle.wheels.joint_names))] if bundle.wheels else [])
+    if layout != trained:
+        problems.append(f"the action is laid out {layout}, trained {trained}")
     if problems:
         raise SystemExit(f"[policy] {bundle.directory} cannot drive this robot:\n  " + "\n  ".join(problems))
     policy = xp.ExportedPolicy(bundle, core.device)
@@ -193,6 +237,9 @@ def _load_exported(bundle, core):
     print(f"[policy] {bundle.describe()}", flush=True)
     print(f"[policy] legs as trained: Isaac Lab order, default pose, kp {contract.kp:g} kd {contract.kd:g}, "
           f"{contract.control_rate:g} Hz", flush=True)
+    if bundle.wheels is not None:
+        print(f"[policy] wheels as trained: {list(bundle.wheels.joint_names)}, velocity targets "
+              f"{bundle.wheels.action_scale:g} rad/s per unit, kd {bundle.wheels.damping:g}", flush=True)
     if bundle.scanner is not None:
         # The scan as the policy will first see it: a masked scan misplaced by the scanner's offset sees far fewer.
         start = sum(contract.obs_widths[t] for t in contract.obs_terms[:contract.obs_terms.index("height_scan")])
@@ -248,7 +295,7 @@ def run(args, simulation_app):
     options = options_from_args(args)
     scene_usd = GENERATED / f"competition_{os.getpid()}.usdc"
     lanes = export_scene(scene_usd, options)
-    levels = lv.catalogue(lanes)
+    levels = lv.catalogue(lanes, args.robot)
     keys = [level.key for level in levels]
     if args.level not in keys:
         raise SystemExit(f"--level must be one of {keys}")
@@ -256,9 +303,16 @@ def run(args, simulation_app):
     level = levels[start]
 
     # --- the robot, the arm, the cup, the camera -----------------------------------------------------------
+    # The Go2-W's trunk is the Go2's, so the D1 welds on at the same mount either way.
+    if args.robot == "go2w":
+        import go2w
+
+        base_usd = go2w.build_go2w_usd()
+    else:
+        base_usd = UNITREE_GO2_CFG.spawn.usd_path
     urdf = SIM_DIR / "d1_arm" / "d1.urdf"
-    weld = build_welded_robot_usd(go2_usd_path=UNITREE_GO2_CFG.spawn.usd_path, d1_urdf_path=str(urdf),
-                                  out_usd_path=str(GENERATED / "go2_d1.usd"), mount_pos=D1_MOUNT_POS,
+    weld = build_welded_robot_usd(go2_usd_path=base_usd, d1_urdf_path=str(urdf),
+                                  out_usd_path=str(GENERATED / f"{args.robot}_d1.usd"), mount_pos=D1_MOUNT_POS,
                                   arm_mass_kg=args.arm_mass)
     lower, upper = _urdf_arm_limits(urdf)
     rest_q = d1_model.rest_joint_rad(lower, upper)
@@ -278,7 +332,7 @@ def run(args, simulation_app):
         cup_usd=cup["usd_path"], cup_pose=lv.cup_pose(lv.CUP_DEMO), camera=camera, mount=mount,
         camera_body_usd=body, spawn=level.spawn, spawn_rotation=level.spawn_rotation, arm_q=rest_q,
         finger_travel=rest_travel, device=args.device, seed=args.seed,
-        camera_period_s=max(1, round(1.0 / (args.camera_hz * 0.02))) * 0.02, policy=exported)
+        camera_period_s=max(1, round(1.0 / (args.camera_hz * 0.02))) * 0.02, policy=exported, model=args.robot)
     envs.base_command["0"] = [0.0, 0.0, 0.0]
     envs.command_limits = exported.contract.command_ranges if exported else None
     # agent_cfg's clip is the sim's own policy's training value. An exported policy's clip, if it has one, is on its
@@ -290,8 +344,9 @@ def run(args, simulation_app):
     missing = [n for n in d1_model.ARM_JOINTS + d1_model.FINGER_JOINTS if n not in names]
     if missing:
         raise RuntimeError(f"The weld did not take: {missing} are not in the Go2's articulation")
-    print(f"[robot] {len(names)} joints, {float(robot.root_physx_view.get_masses()[0].sum()):.3f} kg", flush=True)
-    policy = _load_exported(exported, core) if exported else _load_policy(env, agent_cfg, core.device)[1]
+    print(f"[robot] {ROBOT_NAMES[args.robot]}: {len(names)} joints, "
+          f"{float(robot.root_physx_view.get_masses()[0].sum()):.3f} kg", flush=True)
+    policy = _load_exported(exported, core, args.robot) if exported else _load_policy(env, agent_cfg, core.device)[1]
 
     # --- sensors that need the timeline, then a reset for them to take ----------------------------------------
     scans = add_lidar(1, debug=False, world_frame=args.world_lidar)

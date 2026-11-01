@@ -65,6 +65,9 @@ class LevelManager:
             (1, len(self.leg_ids)), float(term._offset), device=self.device)
         self._scale = term._scale if torch.is_tensor(term._scale) else torch.full(
             (1, len(self.leg_ids)), float(term._scale), device=self.device)
+        # Actions past the legs' (the Go2-W's wheel velocities) are held at zero while the ramp has the legs: the
+        # wheels brake.
+        self._held = self.core.action_manager.total_action_dim - len(self.leg_ids)
         names = list(self.robot.data.joint_names)
         lying = lv.leg_pose(names, lv.LYING_LEG_POSE)
         self.lying_legs = np.array([lying[i] for i in self.leg_ids])
@@ -175,7 +178,8 @@ class LevelManager:
         if targets is None:
             return None
         targets = torch.as_tensor(targets, dtype=torch.float32, device=self.device).reshape(1, -1)
-        return (targets - self._offset) / self._scale
+        legs = (targets - self._offset) / self._scale
+        return torch.cat([legs, torch.zeros(1, self._held, device=self.device)], dim=1) if self._held else legs
 
     # ------------------------------------------------------------------------------------------ loading
     def _load(self, level: lv.Level, start=None) -> None:

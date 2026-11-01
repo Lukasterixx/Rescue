@@ -691,6 +691,92 @@ on a plane or on K-rail tiles of one difficulty. `measure_stance.py`, on the sam
 stops it dead from each of a set of commands, and reports how the weight splits between the front and rear feet,
 how far it pitches, whether both rear feet leave the ground in the stop, and how it stands afterwards.
 
+## The Go2-W's K-Rail Square policy (2026-10-31)
+
+The same task on the wheeled robot the sim now runs by default (`../go2w.py`, `../rescue_sim/README.md`, "The robot"):
+`go2_rescue/krail_go2w_env_cfg.py`, task ids `Isaac-Velocity-Rescue-KRail-Go2W-v0` / `-Play-v0`, runs under
+`go2w_krail`. Everything the Go2's runs settled on is kept, and switched on from the first iteration instead of
+added segment by segment: the reward set with the stance terms, the yaw weights, the mirror training with its loss,
+the 5 cm scan, the commands, the terrain and its ladder. What the wheels change:
+
+| | Go2 (`krail_env_cfg.py`, v3e) | Go2-W (`krail_go2w_env_cfg.py`) |
+|---|---|---|
+| robot | the sim's Go2 + D1, 18.2 kg | the sim's Go2-W + D1, 22.7 kg, standing 0.41 m on 0.172 m wheels |
+| action | 12 leg position targets | the same 12, then 4 wheel velocity targets (5 rad/s per unit, 0.43 m/s at the rim) |
+| observation | 48 + 693 | 48 + 8 + 693: the wheels' speeds after the legs' in `joint_vel`, the last action 16 wide |
+| sideways commands | ±0.8 m/s | ±0.5 m/s: a wheel does not roll sideways, so every sideways metre is stepped, and nav2 never strafes |
+| air-time reward | 0.05 per foot past 0.3 s | none: it pays a trot's swing, which on wheels is stepping where rolling would do |
+| `base_low` | under 0.26 m over the feet (0.33 standing) | under 0.25 m over the axles (0.32 standing) |
+| `tilt_from_ground` | a missed ray reads as ground 0.33 m down | 0.41 m down |
+| mirror | legs | legs; a wheel mirrors to the opposite wheel with the same sign (all four turn about +y) |
+
+Nothing is added to make the robot drive rather than step: rolling costs the legs less torque and acceleration than
+stepping, which `dof_torques_l2` and `dof_acc_l2` already charge, and the README's lesson stands that nothing should
+charge an attempt at a step.
+
+Two things about the robot itself, found before the first run:
+
+- **The wheel's mesh is too small as a collider.** PhysX made Unitree's tyre mesh a convex hull that stood the axles
+  78-81 mm off the ground instead of 86. The sim's model gives each wheel a cylinder the size of the tyre
+  (`go2w.py`).
+- **Cylinders cost twice the physics.** With the URDF's cylinder colliders (hips, calves, hub motors, wheels) the first
+  run took 11 s of collection an iteration against the Go2 run's 6. A 4096-robot benchmark of the training step:
+  the Go2 344 ms, the Go2-W with cylinders 468, with capsules for everything but the wheels 281. The model now has
+  capsules (`go2w.py`), and the run restarted from scratch.
+
+Two things about the sim, found when the first checkpoints failed the square in `measure_square.py` while they
+walked in the training task:
+
+- **The sim gave the wheels the hips' actions.** Isaac Lab's `configclass` puts annotated fields before bare ones,
+  and in the sim's `ActionsCfg` only the optional `wheel_vel` was annotated, so the action manager ordered the terms
+  wheels, legs, arm: the policy's first four outputs drove the wheels, its wheel outputs the rear calves, and
+  `last_action` read back in that order. (Training adds the wheel term in `__post_init__`, after the legs.) Every
+  term is annotated now, and `sim.py` refuses a policy unless the action is laid out legs, then wheels.
+- **`measure_square.py` started every trial with straight legs.** Nothing in the sim's environment resets the
+  joints, and Isaac Lab does not write the configured pose at startup, so every trial began from the USD's zero
+  pose, the knees past their limit; the live sim's level loader writes the standing pose, the script did not. The
+  Go2's policies got up from it. The Go2-W's straight legs put its wheels 10 cm into the floor. The script now
+  writes the standing pose, as the sim does; the Go2's 2026-10-13 policy measures the same through it (5 of 5,
+  19.2 s, 106 % of the commanded speed on CPU physics).
+
+### The run (2026-10-31 to 11-01), and the result
+
+One run from scratch, `w1`, 4096 robots, 8.1 s an iteration. It recovered from the usual early collapse by
+iteration 300, reached terrain level 6.7 at 1000 and settled at 6.0-6.2 from 1250 (of 0-9), with 2-3 % of episodes
+ending in a fall. Its velocity errors fell to 0.13 m/s and 0.24 rad/s by 2500 and then stopped moving; the run was
+stopped at 3000 (6 h 50 min) rather than run on to 8000.
+
+Checkpoints through the square (`measure_square.py`, 0.5 m/s, CPU physics beside the run, then GPU):
+
+| checkpoint | square | route time | speed held | notes |
+|---|---|---|---|---|
+| 1000 | 5 of 5 | 28.1 s | 68-85 % | |
+| 2000 | 10 of 10, and 10 of 10 at 0.3, 0.8 m/s and 15, 20 cm rails | 20.4 s | 94 % | turns on flat ground at 108-115 %, drifts 1.5 cm/s standing |
+| 2800, 2900 | 10 of 10 (GPU) | 20.6, 19.9 s | 98, 96 % | turns 8-25 % fast on flat ground; stand on wheels 5 cm from the centre line after a sideways stop |
+| **3000** | 20 of 20 (GPU), and every variant 10 of 10 | 20.2 s | 99.7 % | flat-ground commands within 1-6 % (sideways 10 % slow); the route's first turn slow (below) |
+
+3000 is `../policies/go2w_krail_2026-11-01`; its README has the full measurements beside the Go2 policy's. In short:
+the square as the Go2's policy does it (20 of 20, a second slower a route, 0.8 m/s 0.4 s faster), the stairs the same,
+the 16 cm deck tiles 14 of 32 to the Go2's 16. It stands and stops better than the Go2's stance fine-tune does, with
+no fine-tune: no rear wheel off the ground in any stop, 45-48 % of the weight on the front wheels standing, all four
+down. The stance terms were on from the start, and a robot on wheels has less reason to pitch onto its front feet.
+
+What it does worse: on GPU physics, the route's first turn, straight out of the 1.7 m walk north, runs at full rate for
+0.6 s and then at a quarter to a third of it for a second. From a standstill at the same spot it turns at full rate,
+and on CPU physics the route's turns are all at full rate. It is how this checkpoint takes a 0.5 m/s walk cut to a
+1 rad/s turn on the spot, which training rarely asks for; the earlier checkpoints do it better and the rest worse.
+
+```bash
+cd ~/IsaacLab
+./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/train.py \
+  --task Isaac-Velocity-Rescue-KRail-Go2W-v0 --headless --num_envs 4096 --max_iterations 3000
+python ~/Rescue/Isaac/go2_omniverse/training/export_krail.py logs/rsl_rl/go2w_krail/<run> \
+  --checkpoint model_3000.pt --out ~/Rescue/Isaac/go2_omniverse/policies/go2w_krail_<date>
+```
+
+The measuring scripts read the robot from the bundle (`krail_bundle.py`), so they are run on a Go2-W bundle exactly
+as on a Go2 one, above.
+
 ## Not done here
 
 - **No actuator delay.** The motor model supports one (`min_delay`/`max_delay`, in 5 ms

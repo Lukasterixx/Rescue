@@ -54,6 +54,8 @@ import isaaclab_tasks  # noqa: E402,F401
 from isaaclab.terrains import TerrainImporterCfg  # noqa: E402
 from isaaclab_tasks.utils import parse_env_cfg  # noqa: E402
 
+import krail_bundle  # noqa: E402
+
 SCENARIOS = {
     "stand": (0.0, 0.0, 0.0), "stop_fwd_0.3": (0.3, 0.0, 0.0), "stop_fwd_0.5": (0.5, 0.0, 0.0),
     "stop_fwd_0.8": (0.8, 0.0, 0.0), "stop_fwd_1.0": (1.0, 0.0, 0.0), "stop_back_0.5": (-0.5, 0.0, 0.0),
@@ -62,14 +64,15 @@ SCENARIOS = {
 }
 # The sim's keyboard drives at 1.0 m/s and 1.0 rad/s (sideways clamped to the policy's 0.8) and lets go to zero.
 CONTACT_N = 1.0
-TASK = "Isaac-Velocity-Rescue-KRail-Go2-Play-v0"
 
 
 @torch.inference_mode()
 def main():
     names = args.scenarios.split(",") if args.scenarios else list(SCENARIOS)
     n = len(names) * args.reps
-    cfg = parse_env_cfg(TASK, device=args.device, num_envs=n)
+    # The task the bundle's robot trained in, and the envelope the sim clamps its commands to.
+    robot_name, task, (lows, highs) = krail_bundle.read(args.policy)
+    cfg = parse_env_cfg(task, device=args.device, num_envs=n)
     cfg.events.add_base_mass = None
     cfg.events.base_com = None
     cfg.episode_length_s = args.walk_s + args.stop_s + 1.0
@@ -82,7 +85,7 @@ def main():
     cfg.commands.base_velocity.debug_vis = False
     cfg.scene.terrain = TerrainImporterCfg(prim_path="/World/ground", terrain_type="plane",
                                            physics_material=cfg.scene.terrain.physics_material)
-    env = gym.make(TASK, cfg=cfg)
+    env = gym.make(task, cfg=cfg)
     core = env.unwrapped
     policy = torch.jit.load(str(Path(args.policy).expanduser() / "policy.pt"), map_location=core.device).eval()
     term = core.command_manager.get_term("base_velocity")
@@ -100,6 +103,7 @@ def main():
     total_mass = float(masses[0].sum())
 
     moving = torch.tensor([SCENARIOS[k] for k in names for _ in range(args.reps)], device=dev)
+    moving = torch.clamp(moving, torch.tensor(lows, device=dev), torch.tensor(highs, device=dev))
     zero = torch.zeros_like(moving)
 
     def yaw_frame(p):
